@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "functions": {
+    "api/*.mjs": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/health",
+      "destination": "/api/health"
+    },
+    {
+      "source": "/v1/register",
+      "destination": "/api/register"
+    },
+    {
+      "source": "/v1/chat/completions",
+      "destination": "/api/chat"
+    },
+    {
+      "source": "/v1/web-search",
+      "destination": "/api/search"
+    }
+  ]
+}

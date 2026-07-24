@@ -3,13 +3,15 @@ import crypto from "node:crypto";
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT) || 8787;
+const IS_VERCEL = process.env.VERCEL === "1";
+const IS_LOCAL = !IS_VERCEL && HOST === "127.0.0.1";
 const ZHIPU_API_KEY = String(process.env.ZHIPU_API_KEY || "").trim();
 const AI_PROVIDER = String(process.env.AI_PROVIDER || "zhipu").trim();
 const MODEL = String(process.env.AI_MODEL || "glm-4.7-flash").trim();
 const FALLBACK_MODEL = String(process.env.AI_FALLBACK_MODEL || "").trim();
 const SESSION_SIGNING_SECRET = String(
   process.env.SESSION_SIGNING_SECRET || (
-    HOST === "127.0.0.1" ? "local-development-only-secret" : ""
+    IS_LOCAL ? "local-development-only-secret" : ""
   )
 ).trim();
 const ZHIPU_CHAT_URL =
@@ -62,13 +64,17 @@ const minuteUsage = new Map();
 const dailyUsage = new Map();
 let globalDailyUsage = { day: utcDay(), units: 0 };
 
-assertProductionConfiguration();
-
-const server = http.createServer(async (request, response) => {
+export async function handleProxyRequest(request, response) {
   const requestId = request.headers["x-request-id"] || crypto.randomUUID();
   const origin = String(request.headers.origin || "");
   const corsOrigin = resolveCorsOrigin(origin);
   setSecurityHeaders(response, requestId);
+
+  try {
+    assertProductionConfiguration();
+  } catch (error) {
+    return sendProxyError(response, error);
+  }
 
   if (request.method === "OPTIONS") {
     if (!corsOrigin) {
@@ -189,46 +195,32 @@ const server = http.createServer(async (request, response) => {
       durationMs: Date.now() - startedAt
     });
   }
-});
-
-server.listen(PORT, HOST, () => {
-  console.log(JSON.stringify({
-    level: "info",
-    event: "server_started",
-    host: HOST,
-    port: PORT,
-    provider: AI_PROVIDER,
-    model: MODEL
-  }));
-});
-
-server.on("clientError", (_error, socket) => {
-  socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
-});
-
-for (const signal of ["SIGTERM", "SIGINT"]) {
-  process.on(signal, () => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 10_000).unref();
-  });
 }
 
 function assertProductionConfiguration() {
   if (!ZHIPU_API_KEY) {
-    console.error("缺少 ZHIPU_API_KEY，代理未启动。");
-    process.exit(1);
+    throw httpError(503, "PROXY_NOT_CONFIGURED", "缺少 ZHIPU_API_KEY。");
   }
   if (AI_PROVIDER !== "zhipu") {
-    console.error(`当前版本暂不支持 AI_PROVIDER=${AI_PROVIDER}`);
-    process.exit(1);
+    throw httpError(
+      503,
+      "PROVIDER_NOT_SUPPORTED",
+      `当前版本暂不支持 AI_PROVIDER=${AI_PROVIDER}`
+    );
   }
   if (!SESSION_SIGNING_SECRET || SESSION_SIGNING_SECRET.length < 24) {
-    console.error("生产环境必须配置至少 24 字符的 SESSION_SIGNING_SECRET。");
-    process.exit(1);
+    throw httpError(
+      503,
+      "PROXY_NOT_CONFIGURED",
+      "生产环境必须配置至少 24 字符的 SESSION_SIGNING_SECRET。"
+    );
   }
-  if (HOST !== "127.0.0.1" && allowedOrigins.size === 0) {
-    console.error("生产环境必须配置 ALLOWED_EXTENSION_ORIGINS。");
-    process.exit(1);
+  if (!IS_LOCAL && allowedOrigins.size === 0) {
+    throw httpError(
+      503,
+      "PROXY_NOT_CONFIGURED",
+      "生产环境必须配置 ALLOWED_EXTENSION_ORIGINS。"
+    );
   }
 }
 
@@ -293,7 +285,7 @@ async function relayUpstream(response, upstream) {
 function resolveCorsOrigin(origin) {
   if (allowedOrigins.has(origin)) return origin;
   if (
-    HOST === "127.0.0.1" &&
+    IS_LOCAL &&
     /^(chrome-extension|moz-extension):\/\/[a-z0-9-]+$/iu.test(origin)
   ) {
     return origin;
@@ -534,4 +526,36 @@ function logRequest({ requestId, path, feature, units, durationMs }) {
     units,
     durationMs
   }));
+}
+
+if (!IS_VERCEL) {
+  try {
+    assertProductionConfiguration();
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+
+  const server = http.createServer(handleProxyRequest);
+  server.listen(PORT, HOST, () => {
+    console.log(JSON.stringify({
+      level: "info",
+      event: "server_started",
+      host: HOST,
+      port: PORT,
+      provider: AI_PROVIDER,
+      model: MODEL
+    }));
+  });
+
+  server.on("clientError", (_error, socket) => {
+    socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+  });
+
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.on(signal, () => {
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(1), 10_000).unref();
+    });
+  }
 }

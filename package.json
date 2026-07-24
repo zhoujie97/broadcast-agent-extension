@@ -4,7 +4,7 @@
   "version": "0.22.0",
   "scripts": {
     "proxy": "node proxy/server.mjs",
-    "check": "node --check extension/background.js && node --check extension/sidepanel.js && node --check extension/content.js && node --check extension/transcript-utils.js && node --check proxy/server.mjs && node --check scripts/build-extension.mjs && node --check scripts/validate-release.mjs",
+    "check": "node --check extension/background.js && node --check extension/sidepanel.js && node --check extension/content.js && node --check extension/transcript-utils.js && node --check proxy/server.mjs && node --check api/health.mjs && node --check api/register.mjs && node --check api/chat.mjs && node --check api/search.mjs && node --check scripts/build-extension.mjs && node --check scripts/validate-release.mjs",
     "build:extension": "node scripts/build-extension.mjs",
     "validate:release": "node scripts/validate-release.mjs",
     "package:extension": "npm run build:extension && npm run validate:release && cd dist/extension && zip -qr ../broadcast-agent-extension.zip ."

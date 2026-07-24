@@ -5,3 +5,5 @@ proxy/.env
 dist/
 .frontend-slides/
 privacy-site/
+.vercel/
+.env.local
