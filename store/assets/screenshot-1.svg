@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+  <rect width="1280" height="800" fill="#eee8d7"/>
+  <rect x="45" y="38" width="1190" height="724" rx="24" fill="#fffdf4" stroke="#c9c1a1" stroke-width="2"/>
+  <rect x="45" y="38" width="1190" height="86" rx="24" fill="#1d3475"/>
+  <circle cx="91" cy="81" r="10" fill="#d75948"/><circle cx="122" cy="81" r="10" fill="#f2c14e"/><circle cx="153" cy="81" r="10" fill="#6ab187"/>
+  <text x="200" y="91" fill="#fff9e8" font-family="system-ui,sans-serif" font-size="25" font-weight="700">播客智能阅读助手</text>
+  <text x="1080" y="90" fill="#8ed9f0" font-family="system-ui,sans-serif" font-size="16">云端 AI</text>
+
+  <g font-family="system-ui,sans-serif" font-size="18" fill="#172555">
+    <text x="78" y="166" font-weight="700">内容地图</text><text x="196" y="166">智能稿本</text><text x="314" y="166">高光切片</text><text x="432" y="166">内容重构</text><text x="550" y="166">知识笔记</text><text x="668" y="166">延伸探索</text>
+  </g>
+  <path d="M72 181h93" stroke="#11a9dc" stroke-width="5" stroke-linecap="round"/>
+
+  <text x="79" y="232" fill="#a64538" font-family="system-ui,sans-serif" font-size="14" font-weight="700" letter-spacing="2">CONTENT MAP</text>
+  <text x="79" y="277" fill="#172555" font-family="system-ui,sans-serif" font-size="34" font-weight="800">一眼读懂四小时访谈</text>
+  <text x="79" y="312" fill="#6c6b72" font-family="system-ui,sans-serif" font-size="18">主题章节、思想碎片与人物生命轨迹，全部保留可跳转时间戳。</text>
+
+  <rect x="79" y="350" width="708" height="154" rx="18" fill="#f7f0d8" stroke="#d8cfac"/>
+  <text x="107" y="389" fill="#a64538" font-family="system-ui,sans-serif" font-size="13" font-weight="700">主题 01 · 00:18:42</text>
+  <text x="107" y="429" fill="#172555" font-family="system-ui,sans-serif" font-size="24" font-weight="800">从职业选择到人生主动权</text>
+  <text x="107" y="463" fill="#55545c" font-family="system-ui,sans-serif" font-size="17">真正的转折并非换了一份工作，而是开始为自己的选择承担后果。</text>
+
+  <rect x="79" y="526" width="708" height="172" rx="18" fill="#fffaf0" stroke="#d8cfac"/>
+  <text x="107" y="564" fill="#11a9dc" font-family="system-ui,sans-serif" font-size="13" font-weight="700">思想碎片</text>
+  <text x="107" y="609" fill="#172555" font-family="system-ui,sans-serif" font-size="21" font-weight="700">“人的稳定感不来自没有变化，</text>
+  <text x="107" y="642" fill="#172555" font-family="system-ui,sans-serif" font-size="21" font-weight="700">而来自相信自己有能力回应变化。”</text>
+  <text x="107" y="675" fill="#7c7463" font-family="system-ui,sans-serif" font-size="14">独立判断 · 点击时间戳回到原声</text>
+
+  <rect x="823" y="205" width="365" height="493" rx="22" fill="#e8f6fb" stroke="#9ed6e9"/>
+  <text x="855" y="252" fill="#087fab" font-family="system-ui,sans-serif" font-size="13" font-weight="700" letter-spacing="2">LIFE PATH</text>
+  <text x="855" y="291" fill="#172555" font-family="system-ui,sans-serif" font-size="26" font-weight="800">人物轨迹</text>
+  <path d="M887 333v294" stroke="#1d3475" stroke-width="4"/>
+  <circle cx="887" cy="357" r="10" fill="#d75948"/>
+  <circle cx="887" cy="451" r="10" fill="#11a9dc"/>
+  <circle cx="887" cy="548" r="10" fill="#d75948"/>
+  <circle cx="887" cy="628" r="10" fill="#11a9dc"/>
+  <g font-family="system-ui,sans-serif" fill="#172555">
+    <text x="917" y="350" font-size="13" fill="#a64538">早期经历</text><text x="917" y="377" font-size="18" font-weight="700">形成最初的价值坐标</text>
+    <text x="917" y="444" font-size="13" fill="#087fab">职业起点</text><text x="917" y="471" font-size="18" font-weight="700">进入行业并建立方法</text>
+    <text x="917" y="541" font-size="13" fill="#a64538">关键转折</text><text x="917" y="568" font-size="18" font-weight="700">一次选择改变长期方向</text>
+    <text x="917" y="621" font-size="13" fill="#087fab">当下</text><text x="917" y="648" font-size="18" font-weight="700">重新理解成功与自由</text>
+  </g>
+</svg>

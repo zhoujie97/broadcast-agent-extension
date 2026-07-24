@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: broadcast-agent-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm run proxy
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: AI_PROVIDER
+        value: zhipu
+      - key: AI_MODEL
+        value: glm-4.7-flash
+      - key: ZHIPU_API_KEY
+        sync: false
+      - key: SESSION_SIGNING_SECRET
+        generateValue: true
+      - key: ALLOWED_EXTENSION_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 8
+      - key: DAILY_INSTALLATION_UNITS
+        value: 80
+      - key: GLOBAL_DAILY_UNITS
+        value: 5000

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>播客智能阅读助手</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <p class="app-kicker">PODCAST FIELD NOTES</p>
+          <h1>播客智能阅读助手</h1>
+          <p id="page-summary" class="secondary">正在检查当前页面…</p>
+        </div>
+        <button id="reload-button" class="icon-button" type="button" aria-label="重新检测字幕">↻</button>
+      </header>
+
+      <section id="status" class="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <strong id="status-title">正在检测字幕</strong>
+          <p id="status-message">正在读取当前视频的登录态和字幕轨。</p>
+        </div>
+      </section>
+
+      <section id="video-info" class="video-info" hidden>
+        <h2 id="video-title"></h2>
+        <div class="metadata">
+          <span id="track-label"></span>
+          <span id="segment-count"></span>
+          <span id="current-time">00:00:00</span>
+        </div>
+      </section>
+
+      <details id="ai-settings" class="ai-settings">
+        <summary>
+          <span>AI 能力</span>
+          <span id="ai-config-state" class="config-state configured">云端 AI</span>
+        </summary>
+        <div class="ai-settings-content">
+          <p class="secondary ai-help">内容地图、智能稿本、高光切片、内容重构、知识笔记和延伸探索共用同一个模型入口。使用 AI 时，相关字幕会发送到云端。</p>
+          <div class="privacy-actions">
+            <button id="review-ai-consent-button" type="button">数据使用说明</button>
+            <button id="revoke-ai-consent-button" type="button" hidden>撤回 AI 授权</button>
+            <button id="clear-video-ai-data-button" type="button">清除本视频 AI 缓存</button>
+            <button id="clear-all-data-button" class="danger-text-button" type="button">清除全部本地数据</button>
+          </div>
+          <p id="ai-consent-state" class="secondary consent-state">尚未授权云端 AI。</p>
+          <p id="ai-status" class="ai-status" aria-live="polite"></p>
+        </div>
+      </details>
+
+      <nav id="workspace-tabs" class="workspace-tabs" aria-label="内容工作区" hidden>
+        <button class="workspace-tab active" type="button" data-panel="overview-panel">内容地图</button>
+        <button class="workspace-tab" type="button" data-panel="transcript-panel">智能稿本</button>
+        <button class="workspace-tab" type="button" data-panel="clips-panel">高光切片</button>
+        <button class="workspace-tab" type="button" data-panel="remix-panel">内容重构</button>
+        <button class="workspace-tab" type="button" data-panel="notes-panel">知识笔记 <span id="note-count" class="tab-count">0</span></button>
+        <button class="workspace-tab" type="button" data-panel="followup-panel">延伸探索</button>
+      </nav>
+
+      <section id="transcript-panel" class="workspace-panel" hidden>
+        <div class="module-hero compact">
+          <p class="module-eyebrow">SMART TRANSCRIPT</p>
+          <h2>智能稿本</h2>
+          <p>按时间阅读完整访谈，点击时间戳跳转视频；选中文字即可结合前后文理解。</p>
+        </div>
+        <section id="toolbar" class="toolbar" hidden>
+          <label class="search">
+            <span class="visually-hidden">搜索智能稿本</span>
+            <input id="search-input" type="search" placeholder="搜索智能稿本">
+          </label>
+          <button id="copy-button" type="button">复制全文</button>
+        </section>
+        <section id="transcript" class="transcript" aria-label="视频智能稿本"></section>
+        <button id="back-to-top-button" class="back-to-top-button" type="button" hidden aria-label="返回顶部">↑ 返回顶部</button>
+      </section>
+
+      <section id="overview-panel" class="workspace-panel">
+        <div class="module-hero">
+          <p class="module-eyebrow">CONTENT MAP</p>
+          <h2>内容地图</h2>
+          <p>把线性采访重组为主题章节、人物生命轨迹与可独立思考的观点。</p>
+          <button id="generate-overview-button" class="primary-action" type="button" disabled>生成内容地图</button>
+        </div>
+        <div id="overview-loading" class="module-loading" hidden><div class="spinner"></div><span>正在划分主题、重建人物轨迹并提炼思想碎片…</span></div>
+        <div id="overview-output" class="overview-output" hidden>
+          <section class="overview-summary-card">
+            <p id="overview-one-liner" class="overview-one-liner"></p>
+            <p id="overview-summary"></p>
+          </section>
+          <section>
+            <h3 class="section-title">采访人物</h3>
+            <p class="fact-check-note">人物资料由联网搜索辅助核实，并附可点击来源；来源不足或存在冲突的事实将省略。</p>
+            <img id="overview-cover" class="overview-cover" alt="本期采访画面，来自 Bilibili 视频封面" hidden>
+            <p class="people-group-title">采访者</p>
+            <div id="overview-interviewers" class="people-list"></div>
+            <p class="people-group-title">被采访者</p>
+            <div id="overview-interviewees" class="people-list"></div>
+          </section>
+          <section>
+            <h3 class="section-title">主题章节</h3>
+            <div id="overview-chapters" class="chapter-list"></div>
+          </section>
+          <section>
+            <div class="section-heading">
+              <div>
+                <h3 class="section-title">人物轨迹</h3>
+                <p class="section-description">按人物生命阶段重新排序，标记重要事件与转折点。</p>
+              </div>
+              <span class="section-stamp">LIFE PATH</span>
+            </div>
+            <div id="overview-life-paths" class="life-paths"></div>
+          </section>
+          <section>
+            <div class="section-heading">
+              <div>
+                <h3 class="section-title">思想碎片</h3>
+                <p class="section-description">从具体经历中抽离，留下仍可独立成立的观点与判断。</p>
+              </div>
+              <span class="section-stamp">IDEAS</span>
+            </div>
+            <div id="overview-thought-fragments" class="thought-fragments"></div>
+          </section>
+        </div>
+        <p id="overview-error" class="module-error" hidden></p>
+      </section>
+
+      <section id="clips-panel" class="workspace-panel" hidden>
+        <div class="module-hero clips-hero">
+          <p class="module-eyebrow">AI HIGHLIGHTS</p>
+          <h2>发现最值得观看、理解和再利用的内容</h2>
+          <p>从传播价值、认知价值和二次创作价值出发，识别长采访中的关键内容节点。</p>
+          <button id="generate-clips-button" class="primary-action" type="button" disabled>分析内容价值</button>
+        </div>
+        <div id="clips-loading" class="module-loading" hidden><div class="spinner"></div><span>正在生成内容价值画像和传播场景建议…</span></div>
+        <div id="clips-output" class="clips-output" hidden>
+          <div class="clips-toolbar">
+            <div><p id="clips-intro" class="clips-intro"></p><p class="clips-sort-note">默认按综合内容价值从高到低排序</p></div>
+          </div>
+          <div id="clip-filters" class="clip-filters" aria-label="按爆点类型筛选">
+            <button class="clip-filter active" type="button" data-clip-filter="全部">全部</button>
+            <button class="clip-filter" type="button" data-clip-filter="情绪共鸣">情绪</button>
+            <button class="clip-filter" type="button" data-clip-filter="认知突破">观点</button>
+            <button class="clip-filter" type="button" data-clip-filter="金句传播">金句</button>
+            <button class="clip-filter" type="button" data-clip-filter="故事高潮">故事</button>
+            <button class="clip-filter" type="button" data-clip-filter="争议观点">争议</button>
+          </div>
+          <div id="clips-items" class="clips-grid" aria-label="爆点候选片段"></div>
+        </div>
+        <p id="clips-error" class="module-error" hidden></p>
+      </section>
+
+      <section id="remix-panel" class="workspace-panel" hidden>
+        <div class="module-hero">
+          <p class="module-eyebrow">CONTENT RECONSTRUCTION</p>
+          <h2>内容重构</h2>
+          <p>保留原意与事实边界，把口语采访转换为更适合阅读和分享的文本。</p>
+        </div>
+        <div class="remix-controls">
+          <label class="field"><span>写作形式</span>
+            <select id="remix-style">
+              <option value="profile">人物特写</option>
+              <option value="magazine">杂志报道</option>
+              <option value="biography">人物传记片段</option>
+              <option value="first_person">第一人称自述</option>
+              <option value="insight_essay">观点深度文章</option>
+            </select>
+          </label>
+          <label class="field"><span>篇幅</span>
+            <select id="remix-length">
+              <option value="short">短篇 · 约 1000 字</option>
+              <option value="medium" selected>中篇 · 约 2000 字</option>
+              <option value="long">长篇 · 约 3500 字</option>
+            </select>
+          </label>
+          <button id="generate-remix-button" class="primary-action" type="button" disabled>生成作品</button>
+        </div>
+        <div id="remix-loading" class="module-loading" hidden><div class="spinner"></div><span>正在构思结构并重写采访…</span></div>
+        <article id="remix-output" class="remix-output" hidden>
+          <div class="remix-output-header">
+            <div><h2 id="remix-title"></h2><p id="remix-deck"></p></div>
+            <button id="copy-remix-button" type="button">复制文章</button>
+          </div>
+          <div id="remix-body" class="article-body"></div>
+          <p id="remix-disclaimer" class="article-disclaimer"></p>
+        </article>
+        <p id="remix-error" class="module-error" hidden></p>
+      </section>
+
+      <section id="notes-panel" class="workspace-panel" hidden>
+        <div class="module-hero compact">
+          <p class="module-eyebrow">WATCH · THINK · ASK</p>
+          <h2>知识笔记</h2>
+          <p>记录观看时的想法；AI 问答也会自动成为可回看的笔记。</p>
+        </div>
+        <form id="question-form" class="question-form">
+          <label for="question-input">向这期采访提问</label>
+          <textarea id="question-input" rows="3" placeholder="例如：嘉宾为什么认为这个行业会发生变化？"></textarea>
+          <button id="ask-button" class="primary-action" type="submit" disabled>提问并写入笔记</button>
+        </form>
+        <div id="question-loading" class="module-loading" hidden><div class="spinner"></div><span>正在检索采访上下文并回答…</span></div>
+        <p id="question-error" class="module-error" hidden></p>
+        <div class="notes-toolbar"><h3 class="section-title">全部记录</h3><button id="add-note-button" type="button">＋ 添加当前时间笔记</button></div>
+        <div id="notes-empty" class="empty-state">还没有笔记。播放视频时随时点击“记笔记”。</div>
+        <div id="notes-list" class="notes-list"></div>
+      </section>
+
+      <section id="followup-panel" class="workspace-panel" hidden>
+        <div class="module-hero">
+          <p class="module-eyebrow">EXTENDED DISCOVERY</p>
+          <h2>延伸探索</h2>
+          <p>从采访人物和核心话题出发，查找相关播客、视频、文章与背景资料。所有推荐都附原始链接。</p>
+          <button id="generate-followup-button" class="primary-action" type="button" disabled>生成延伸探索</button>
+        </div>
+        <div id="followup-loading" class="module-loading" hidden><div class="spinner"></div><span>正在联网检索并核对相关内容…</span></div>
+        <div id="followup-output" class="followup-output" hidden>
+          <p id="followup-intro" class="followup-intro"></p>
+          <div id="followup-topics" class="followup-topics"></div>
+          <div id="followup-items" class="followup-list"></div>
+        </div>
+        <p id="followup-error" class="module-error" hidden></p>
+      </section>
+
+    </main>
+
+    <template id="segment-template">
+      <article class="segment">
+        <button class="timestamp" type="button"></button>
+        <div class="segment-body"><p class="segment-text"></p></div>
+      </article>
+    </template>
+
+    <dialog id="insight-dialog" class="insight-dialog">
+      <div class="dialog-header"><div><p id="insight-kicker" class="dialog-kicker"></p><h2>结合上下文理解</h2></div><button id="close-insight-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button></div>
+      <blockquote id="insight-excerpt" class="insight-excerpt"></blockquote>
+      <div id="insight-loading" class="insight-loading" aria-live="polite"><div class="spinner"></div><span>正在结合前后文分析…</span></div>
+      <div id="insight-content" class="insight-content" hidden>
+        <p id="insight-explanation"></p>
+      </div>
+      <div id="insight-error" class="insight-error" hidden><p id="insight-error-message"></p><button id="retry-insight-button" type="button">重试</button></div>
+    </dialog>
+
+    <dialog id="note-dialog" class="note-dialog">
+      <form id="note-form" method="dialog">
+        <div class="dialog-header"><div><p class="dialog-kicker">时间轴标记</p><h2 id="note-dialog-time">00:00:00</h2></div><button id="close-note-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button></div>
+        <textarea id="note-input" rows="6" placeholder="写下此刻的想法、疑问或待办…" required></textarea>
+        <div class="dialog-actions"><button id="cancel-note-button" type="button">取消</button><button class="primary-action" type="submit">保存笔记</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="ai-consent-dialog" class="consent-dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="dialog-kicker">PRIVACY FIRST</p>
+          <h2>启用云端 AI</h2>
+        </div>
+        <button id="close-ai-consent-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="consent-copy">
+        <p>为了生成内容地图、高光切片、内容重构、问答和延伸探索，插件会把当前视频标题、相关字幕片段和你的问题发送到我们的 HTTPS AI 代理，再由代理调用智谱 GLM。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
+        <p>AI 结果和知识笔记默认保存在本机浏览器中。你可以随时撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
+        <p><a href="privacy.html" target="_blank" rel="noreferrer">查看完整隐私说明</a></p>
+      </div>
+      <div class="dialog-actions">
+        <button id="decline-ai-consent-button" type="button">暂不启用</button>
+        <button id="accept-ai-consent-button" class="primary-action" type="button">同意并启用 AI</button>
+      </div>
+    </dialog>
+
+    <script src="transcript-utils.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

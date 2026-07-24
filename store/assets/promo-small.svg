@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <rect width="440" height="280" rx="22" fill="#f5f0df"/>
+  <path d="M0 218h440v62H0z" fill="#1d3475"/>
+  <circle cx="68" cy="69" r="42" fill="#fff9e8" stroke="#1d3475" stroke-width="5"/>
+  <path d="M49 51h38v38H49z" fill="#11a9dc"/>
+  <path d="M51 83l11-10 7 7 13-16 8 8v17H51z" fill="#d75948"/>
+  <text x="124" y="59" fill="#a64538" font-family="system-ui,sans-serif" font-size="13" font-weight="700" letter-spacing="2">PODCAST FIELD NOTES</text>
+  <text x="124" y="92" fill="#172555" font-family="system-ui,sans-serif" font-size="27" font-weight="800">播客智能阅读助手</text>
+  <text x="38" y="145" fill="#172555" font-family="system-ui,sans-serif" font-size="22" font-weight="700">把长视频变成可以阅读、</text>
+  <text x="38" y="177" fill="#172555" font-family="system-ui,sans-serif" font-size="22" font-weight="700">理解与重新发现的内容</text>
+  <text x="38" y="250" fill="#fff9e8" font-family="system-ui,sans-serif" font-size="15">智能稿本 · 内容地图 · 高光切片 · 知识笔记</text>
+</svg>
