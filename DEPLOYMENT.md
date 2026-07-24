@@ -37,6 +37,7 @@ Bilibili 页面
 
 1. 在 Render 选择 **New → Blueprint**，连接上述 GitHub 仓库。
 2. Render 会读取根目录的 `render.yaml` 创建 `broadcast-agent-api`。
+   当前 Blueprint 已明确使用 `plan: free`，不应自动选择付费 Starter 实例。
 3. 在 Render 的 Environment 中录入：
    - `ZHIPU_API_KEY`：智谱正式密钥。
    - `ALLOWED_EXTENSION_ORIGINS`：第一次可先填本机侧载扩展的 Origin，例如 `chrome-extension://扩展ID`。提交商店后再增加正式扩展 ID，多个 Origin 用英文逗号分隔。

@@ -2,6 +2,7 @@ services:
   - type: web
     name: broadcast-agent-api
     runtime: node
+    plan: free
     buildCommand: npm install
     startCommand: npm run proxy
     healthCheckPath: /health
