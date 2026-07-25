@@ -1805,7 +1805,7 @@ async function generateRemix(payload = {}) {
       required: ["title", "deck", "mode", "sections", "disclaimer"]
     },
     instructions:
-      `${styleInstructions[style]}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。这是一次完整文章创作，不是访谈摘要、提纲或问答整理。必须有明确开篇、持续推进的中段和有回响的结尾；相邻段落之间要有因果、时间、转折或论证关系，不能把互不相干的句子拼在一起。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自稿本。sections 应有3至7节，每节 heading 使用12至28个汉字，写成信息充分、具有叙事或论证张力的小标题，不能只写“成长”“转折”“选择”等空泛短词；每节 paragraphs 是2至5个完整自然段，每段至少包含两句意义连贯的中文。不要在段落中使用 Markdown 标题、项目符号、编号、时间戳或说话人标签。各节之间必须形成清晰推进。mode 必须严格返回 ${style}。disclaimer 简短说明改写边界。`,
+      `${styleInstructions[style]}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。这是一次完整文章创作，不是访谈摘要、提纲或问答整理。必须有明确开篇、持续推进的中段和有回响的结尾；相邻段落之间要有因果、时间、转折或论证关系，不能把互不相干的句子拼在一起。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自稿本。sections 应有3至7节，每节 heading 使用12至28个汉字，写成信息充分、具有叙事或论证张力的小标题，不能只写“成长”“转折”“选择”等空泛短词；每节 paragraphs 是2至5个完整自然段，每段至少包含两句意义连贯的中文。不要在段落中使用 Markdown 标题、项目符号、编号、时间戳或说话人标签。各节之间必须形成清晰推进。输入中的 otherModeSamples 是同一访谈其他写作模式的样例，只用于提醒你避免照抄其标题、开篇句式和章节顺序；人物、事实和必要专有名词可以正常重合。mode 必须严格返回 ${style}。disclaimer 简短说明改写边界。`,
     input: JSON.stringify({
       taskMode: style,
       primaryGuest,
@@ -1822,14 +1822,13 @@ async function generateRemix(payload = {}) {
     validateResult: (value) => remixValidationIssues(
       value,
       style,
-      length,
-      payload.referenceRemixes
+      length
     )
   });
   return { ok: true, remix: result };
 }
 
-function remixValidationIssues(result, style, length, referenceRemixes = []) {
+function remixValidationIssues(result, style, length) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return ["结果不是文章对象"];
   }
@@ -1894,39 +1893,7 @@ function remixValidationIssues(result, style, length, referenceRemixes = []) {
     }
   }
 
-  const opening = paragraphs.slice(0, 2).join("").slice(0, 900);
-  for (const reference of Array.isArray(referenceRemixes) ? referenceRemixes : []) {
-    const referenceOpening = String(reference?.opening || "");
-    if (
-      referenceOpening &&
-      characterNgramSimilarity(opening, referenceOpening, 3) >= 0.72
-    ) {
-      issues.push("开篇与另一写作模式过于相似，必须更换视角和文章骨架");
-      break;
-    }
-  }
   return [...new Set(issues)].slice(0, 8);
-}
-
-function characterNgramSimilarity(left, right, size = 3) {
-  const normalize = (value) => String(value || "")
-    .replace(/[\s，。！？、；：“”‘’（）()《》…—-]/gu, "");
-  const toNgrams = (value) => {
-    const text = normalize(value);
-    const grams = new Set();
-    for (let index = 0; index <= text.length - size; index += 1) {
-      grams.add(text.slice(index, index + size));
-    }
-    return grams;
-  };
-  const leftGrams = toNgrams(left);
-  const rightGrams = toNgrams(right);
-  if (!leftGrams.size || !rightGrams.size) return 0;
-  let intersection = 0;
-  for (const gram of leftGrams) {
-    if (rightGrams.has(gram)) intersection += 1;
-  }
-  return intersection / Math.min(leftGrams.size, rightGrams.size);
 }
 
 async function askPodcast(payload = {}) {
@@ -2300,10 +2267,13 @@ async function callAiJson({
   }
 
   const outputPreview = safeOutputPreview(outputText);
+  const previewMessage = !parsed.ok && outputPreview
+    ? ` 模型回复：${outputPreview}`
+    : "";
   throw createError(
     parsed.ok ? "AI_PROXY_INCOMPLETE_RESULT" : "AI_PROXY_INVALID_JSON",
     `云端 AI 连续两次没有返回完整结果：${validationIssues.join("；")}。` +
-      (outputPreview ? ` 模型回复：${outputPreview}` : ""),
+      previewMessage,
     {
       responseId: payload.id,
       model: "proxy-default",

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "114",
   "name": "播客智能阅读助手",
-  "version": "0.23.5",
+  "version": "0.23.6",
   "description": "以可拖动、可调宽度的网页悬浮阅读面板读取 Bilibili 智能稿本，并提供内容地图、高光切片、内容重构、知识笔记和延伸探索。",
   "permissions": [
     "activeTab",
