@@ -1,6 +1,6 @@
 # 播客智能阅读助手上线手册
 
-本文档对应当前代码版本 `0.23.1`。目标是把 AI 代理部署到 Vercel，再以 Hidden 方式发布到 Microsoft Edge Add-ons，先验证真实用户体验与 AI 成本。
+本文档对应当前代码版本 `0.23.2`。目标是把 AI 代理部署到 Vercel，再以 Hidden 方式发布到 Microsoft Edge Add-ons，先验证真实用户体验与 AI 成本。
 
 ## 1. 发布结构
 

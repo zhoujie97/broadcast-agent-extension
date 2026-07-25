@@ -479,7 +479,7 @@ async function loadWorkspaceData() {
     "remix",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
-  const followupKey = videoStorageKey("followupV2");
+  const followupKey = videoStorageKey("followupV3");
   const clipsKey = videoStorageKey("contentValueRadarV4");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
@@ -1167,7 +1167,7 @@ async function generateFollowup() {
     }
     renderFollowup(response.followup);
     await chrome.storage.local.set({
-      [videoStorageKey("followupV2")]: response.followup
+      [videoStorageKey("followupV3")]: response.followup
     });
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
   } catch (error) {

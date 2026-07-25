@@ -45,7 +45,8 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("contentValueRadarV3:") ||
       key.startsWith("contentMap:") ||
       key.startsWith("contentMapV2:") ||
-      key.startsWith("contentMapV3:")
+      key.startsWith("contentMapV3:") ||
+      key.startsWith("followupV2:")
     );
   const sessionKeys = Object.keys(sessionValues)
     .filter((key) => key.startsWith("speakerLabels:"));
@@ -1283,25 +1284,30 @@ async function generateFollowup(payload = {}) {
   const overview = payload.overview || {};
   const names = (Array.isArray(overview.interviewees)
     ? overview.interviewees.map((person) => person.name)
-    : []).filter(Boolean).slice(0, 3);
-  const topics = (Array.isArray(overview.thoughtFragments)
-    ? overview.thoughtFragments.map((fragment) => fragment?.statement)
-    : Array.isArray(overview.takeaways) ? overview.takeaways : [])
-    .filter(Boolean)
+    : [])
+    .map(cleanFollowupSearchTerm)
+    .filter((name) => name.length >= 2)
     .slice(0, 3);
+  const topics = collectFollowupTopics(overview);
   const title = String(payload.video?.title || "").slice(0, 48);
-  const queries = [
-    `${names.join(" ") || title} 播客 访谈 视频`,
-    `${topics.join(" ").slice(0, 50) || title} 深度访谈`,
-    `${names.join(" ") || title} 背景 文章`
-  ].map((query) => query.slice(0, 70));
+  const primarySubject = names[0] || cleanFollowupSearchTerm(title);
+  const biliQueries = deduplicateStrings([
+    `${primarySubject} 访谈`,
+    `${primarySubject} 对话`,
+    `${primarySubject} 播客`
+  ]).map((query) => query.slice(0, 48));
+  const webQueries = deduplicateStrings([
+    `${primarySubject} 深度访谈`,
+    `${primarySubject} 人物专访`,
+    topics[0] ? `${primarySubject} ${topics[0]}` : ""
+  ]).filter(Boolean).map((query) => query.slice(0, 70));
   const videoBatches = await Promise.all(
-    queries.slice(0, 2).map((query) =>
+    biliQueries.map((query) =>
       searchBilibiliVideos(query, 8).catch(() => [])
     )
   );
   const webBatches = await Promise.all(
-    queries.map((query) => searchWeb(query, 10).catch(() => []))
+    webQueries.map((query) => searchWeb(query, 10).catch(() => []))
   );
   const knowledgeBatches = await Promise.all(
     names.map(async (name) => {
@@ -1323,21 +1329,28 @@ async function generateFollowup(payload = {}) {
     ...webBatches.flat().filter(isUsableResearchEvidence),
     ...knowledgeBatches.flat()
   ]) {
+    const relevanceScore = followupRelevanceScore(item, names, topics, title);
     if (
       !item.url ||
       seen.has(item.url) ||
-      isCurrentVideoResult(item, payload.video)
+      isCurrentVideoResult(item, payload.video) ||
+      isSearchLandingPage(item.url) ||
+      relevanceScore < 1
     ) continue;
     seen.add(item.url);
-    candidates.push({ ...item, inferredType: inferFollowupType(item) });
+    candidates.push({
+      ...item,
+      inferredType: inferFollowupType(item),
+      relevanceScore
+    });
   }
   candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
   candidates.splice(30);
   if (!candidates.length) {
-    return {
-      ok: true,
-      followup: buildFollowupSearchFallback(queries, names, topics)
-    };
+    throw createError(
+      "FOLLOWUP_NO_CONCRETE_RESULTS",
+      "没有检索到与本期人物或主题直接相关的具体视频和文章，请稍后重试。"
+    );
   }
 
   let result;
@@ -1409,7 +1422,73 @@ async function generateFollowup(payload = {}) {
       publishDate: item.publishDate || ""
     }));
   }
+  result.items = result.items.filter((item) =>
+    item?.url && !isSearchLandingPage(item.url)
+  );
+  if (!result.items.length) {
+    throw createError(
+      "FOLLOWUP_NO_VERIFIED_RESULTS",
+      "没有得到可验证的具体资料链接，结果未保存。"
+    );
+  }
   return { ok: true, followup: result };
+}
+
+function cleanFollowupSearchTerm(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function collectFollowupTopics(overview = {}) {
+  const lenses = (Array.isArray(overview.thoughtFragments)
+    ? overview.thoughtFragments.map((fragment) => fragment?.lens)
+    : []);
+  const chapters = (Array.isArray(overview.chapters)
+    ? overview.chapters.map((chapter) => chapter?.title)
+    : []);
+  return deduplicateStrings([...lenses, ...chapters]
+    .map(cleanFollowupSearchTerm)
+    .filter((term) => term.length >= 2 && term.length <= 18))
+    .slice(0, 5);
+}
+
+function deduplicateStrings(values) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function followupRelevanceScore(item, names, topics, videoTitle) {
+  const haystack = normalizeComparableTitle(
+    `${item.title || ""} ${item.content || ""}`
+  );
+  const nameHits = names.filter((name) =>
+    haystack.includes(normalizeComparableTitle(name))
+  ).length;
+  const topicHits = topics.filter((topic) =>
+    haystack.includes(normalizeComparableTitle(topic))
+  ).length;
+  const titleTerms = cleanFollowupSearchTerm(videoTitle)
+    .split(/[\s|｜：:，,。！？!?《》【】（）()—–-]+/u)
+    .map(normalizeComparableTitle)
+    .filter((term) => term.length >= 2 && term.length <= 12);
+  const titleHits = titleTerms.filter((term) => haystack.includes(term)).length;
+  return nameHits * 20 + topicHits * 5 + Math.min(3, titleHits);
+}
+
+function isSearchLandingPage(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const host = url.hostname.toLocaleLowerCase();
+    return (
+      /(?:^|\.)search\.bilibili\.com$/u.test(host) ||
+      /(?:^|\.)bing\.com$/u.test(host) && url.pathname.startsWith("/search") ||
+      /(?:^|\.)baidu\.com$/u.test(host) && url.pathname.startsWith("/s")
+    );
+  } catch {
+    return true;
+  }
 }
 
 function isCurrentVideoResult(item, video = {}) {
@@ -1481,21 +1560,6 @@ function buildCandidateFollowup(candidates, names, topics) {
   };
 }
 
-function buildFollowupSearchFallback(queries, names, topics) {
-  return {
-    intro: "检索接口暂未返回具体条目，可通过以下入口继续查找。",
-    topics: [...names, ...topics].filter(Boolean).slice(0, 6),
-    items: queries.slice(0, 3).map((query) => ({
-      title: `在 Bilibili 搜索：${query}`,
-      url: `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`,
-      type: "podcast",
-      source: "Bilibili 搜索",
-      why: "打开搜索结果页，查看相关播客、访谈和视频。",
-      publishDate: ""
-    }))
-  };
-}
-
 function inferFollowupType(item = {}) {
   const text = `${item.title || ""} ${item.content || ""}`.toLocaleLowerCase();
   let hostname = "";
@@ -1524,7 +1588,11 @@ function followupTypeRank(type) {
 function followupCandidateScore(item) {
   const type = item.inferredType || inferFollowupType(item);
   const typeScore = ({ podcast: 300, video: 200, article: 100 })[type] || 0;
-  return typeScore + Math.max(-5, researchSourceScore(item)) * 5;
+  return (
+    typeScore +
+    Math.max(-5, researchSourceScore(item)) * 5 +
+    Math.max(0, Number(item.relevanceScore) || 0) * 10
+  );
 }
 
 async function searchWeb(query, count = 10) {
@@ -1749,7 +1817,10 @@ function isUsableResearchEvidence(result) {
     if (/(?:好电影推荐|必看电影|十部经典|十大经典|演员列表|盘点\d*)/u.test(title)) {
       return false;
     }
-    return Boolean(title.trim() && String(result.content || "").trim());
+    return Boolean(
+      title.trim() &&
+      (String(result.content || "").trim() || researchSourceScore(result) >= 5)
+    );
   } catch {
     return false;
   }
