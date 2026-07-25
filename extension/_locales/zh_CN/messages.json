@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "播客智能阅读助手",
+    "description": "扩展在浏览器和 Edge 加载项商店中显示的名称"
+  },
+  "extensionDescription": {
+    "message": "把 Bilibili 长视频转化为可阅读、可跳转、可提问的智能稿本，并提供内容地图、高光切片、内容重构、知识笔记和延伸探索。",
+    "description": "扩展在浏览器和 Edge 加载项商店中显示的简短描述"
+  },
+  "actionTitle": {
+    "message": "打开播客智能阅读助手",
+    "description": "鼠标悬停在扩展工具栏图标上时显示的文字"
+  }
+}
