@@ -639,7 +639,7 @@ function renderLifePaths(trajectories) {
       item.className = `life-event${event.turningPoint ? " turning-point" : ""}`;
       const period = document.createElement("span");
       period.className = "life-period";
-      period.textContent = event.period || "阶段未明";
+      period.textContent = displayLifePeriod(event.period);
       const eventTitle = document.createElement("h5");
       eventTitle.textContent = event.title || "重要经历";
       const description = document.createElement("p");
@@ -658,6 +658,17 @@ function renderLifePaths(trajectories) {
     }
     elements.overviewLifePaths.append(article);
   }
+}
+
+function displayLifePeriod(value) {
+  const period = String(value || "")
+    .replace(/\s+/gu, "")
+    .replace(/^[,，.。:：;；、\-—–]+|[,，.。:：;；、\-—–]+$/gu, "")
+    .trim();
+  return (
+    period &&
+    !/^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定)$/u.test(period)
+  ) ? period : "阶段未明";
 }
 
 function renderThoughtFragments(fragments) {

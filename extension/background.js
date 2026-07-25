@@ -399,7 +399,7 @@ async function generateOverview(payload = {}) {
       ]
     },
     instructions:
-      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 是被采访者的人生时间线，不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者在信息充分时给出4至8个事件，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
+      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 是被采访者的人生时间线，不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者在信息充分时给出4至8个事件，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词；period 绝不能返回单独的‘年’‘月’‘日’‘时期’或‘阶段’，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
     input: JSON.stringify({
       videoTitle,
       publisher: payload.video?.publisher || "",
@@ -980,7 +980,9 @@ function sanitizeUnsupportedContentMapYears(overview, evidenceText) {
     trajectory.events = (Array.isArray(trajectory.events) ? trajectory.events : [])
       .map((event) => ({
         ...event,
-        period: stripUnsupportedYears(event?.period, evidenceText),
+        period: normalizeLifePeriod(
+          stripUnsupportedYears(event?.period, evidenceText)
+        ),
         title: stripUnsupportedYears(event?.title, evidenceText),
         description: stripUnsupportedYears(event?.description, evidenceText)
       }));
@@ -1081,6 +1083,7 @@ function normalizeContentMapResult(overview, transcript) {
         .filter((event) => event?.title && event?.description)
         .map((event) => ({
           ...event,
+          period: normalizeLifePeriod(event.period),
           mentionedAt: nearestTranscriptTime(event.mentionedAt, existingTimes)
         }))
         .slice(0, 8)
@@ -1112,6 +1115,20 @@ function stripUnsupportedYears(value, evidenceText) {
     .replace(/\s+》/gu, "》")
     .replace(/[ ]{2,}/gu, " ")
     .trim();
+}
+
+function normalizeLifePeriod(value) {
+  const period = String(value || "")
+    .replace(/\s+/gu, "")
+    .replace(/^[,，.。:：;；、\-—–]+|[,，.。:：;；、\-—–]+$/gu, "")
+    .trim();
+  if (
+    !period ||
+    /^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定)$/u.test(period)
+  ) {
+    return "阶段未明";
+  }
+  return period;
 }
 
 function personProfileSchema() {
