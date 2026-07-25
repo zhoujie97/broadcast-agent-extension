@@ -476,7 +476,7 @@ async function loadWorkspaceData() {
   const overviewKey = videoStorageKey("contentMapV6");
   const notesKey = videoStorageKey("timelineNotes");
   const remixKey = videoStorageKey(
-    "remixV3",
+    "remixV4",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const followupKey = videoStorageKey("followupV3");
@@ -1304,13 +1304,23 @@ async function generateRemix() {
   try {
     const style = elements.remixStyle.value;
     const length = elements.remixLength.value;
+    const referenceRemixes = await loadOtherRemixSamples(style, length);
     const response = await chrome.runtime.sendMessage({
       type: "GENERATE_REMIX",
       payload: {
         video: currentVideo,
         segments: transcriptForAi(),
         style,
-        length
+        length,
+        people: {
+          interviewers: (Array.isArray(currentOverview?.interviewers)
+            ? currentOverview.interviewers
+            : []).map((person) => person?.name).filter(Boolean),
+          interviewees: (Array.isArray(currentOverview?.interviewees)
+            ? currentOverview.interviewees
+            : []).map((person) => person?.name).filter(Boolean)
+        },
+        referenceRemixes
       }
     });
     if (!response?.ok) {
@@ -1318,7 +1328,7 @@ async function generateRemix() {
     }
     renderRemix(response.remix);
     await chrome.storage.local.set({
-      [videoStorageKey("remixV3", `${style}:${length}`)]: response.remix
+      [videoStorageKey("remixV4", `${style}:${length}`)]: response.remix
     });
   } catch (error) {
     elements.remixError.textContent = error.message;
@@ -1331,7 +1341,7 @@ async function generateRemix() {
 async function loadSelectedRemix() {
   if (!currentVideo) return;
   const key = videoStorageKey(
-    "remixV3",
+    "remixV4",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const stored = await chrome.storage.local.get(key);
@@ -1341,6 +1351,30 @@ async function loadSelectedRemix() {
     currentRemix = null;
     elements.remixOutput.hidden = true;
   }
+}
+
+async function loadOtherRemixSamples(activeStyle, length) {
+  const styles = ["profile", "first_person", "insight_essay"]
+    .filter((style) => style !== activeStyle);
+  const keys = styles.map((style) =>
+    videoStorageKey("remixV4", `${style}:${length}`)
+  );
+  const stored = await chrome.storage.local.get(keys);
+  return styles.map((style, index) => {
+    const remix = stored[keys[index]];
+    if (!remix) return null;
+    const sections = normalizeRemixSections(remix);
+    return {
+      mode: style,
+      title: String(remix.title || "").slice(0, 80),
+      headings: sections.map((section) => section.heading).slice(0, 7),
+      opening: sections
+        .slice(0, 2)
+        .flatMap((section) => section.paragraphs)
+        .join("")
+        .slice(0, 900)
+    };
+  }).filter(Boolean);
 }
 
 function renderRemix(remix) {

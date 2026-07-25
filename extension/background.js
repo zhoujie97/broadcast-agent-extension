@@ -51,6 +51,7 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("contentMapV5:") ||
       key.startsWith("remix:") ||
       key.startsWith("remixV2:") ||
+      key.startsWith("remixV3:") ||
       key.startsWith("followupV2:")
     );
   const sessionKeys = Object.keys(sessionValues)
@@ -1746,15 +1747,25 @@ function normalizeExternalUrl(value) {
 async function generateRemix(payload = {}) {
   const segments = requireTranscriptSegments(payload.segments);
   const transcript = prepareTranscriptForAi(segments);
-  const style = String(payload.style || "profile");
+  const allowedStyles = ["profile", "first_person", "insight_essay"];
+  const requestedStyle = String(payload.style || "profile");
+  const style = allowedStyles.includes(requestedStyle) ? requestedStyle : "profile";
   const length = String(payload.length || "medium");
+  const people = payload.people || {};
+  const interviewees = (Array.isArray(people.interviewees)
+    ? people.interviewees
+    : []).map((name) => String(name || "").trim()).filter(Boolean);
+  const interviewers = (Array.isArray(people.interviewers)
+    ? people.interviewers
+    : []).map((name) => String(name || "").trim()).filter(Boolean);
+  const primaryGuest = interviewees[0] || "主要被采访者";
   const styleInstructions = {
     profile:
-      "人物特写。必须使用第三人称，以记者或非虚构作者的观察视角写人物，不能把全文写成嘉宾自述。开头从访谈中真实存在的一个动作、语气、选择或矛盾切入；正文围绕人物的关键选择、性格张力、职业转折与行动方式推进，把经历写成能解释人物的叙事，而不是按年份罗列简历。每一节都要同时包含具体经历与编辑分析，并清楚区分人物原话、事实转述和作者观察；结尾回到人物仍未解决的命题或持续坚持的价值。",
+      `你正在单独创作“人物特写”，中心人物是${primaryGuest}。文章回答“这个人如何在一连串选择与代价中成为今天的自己”。必须全程采用第三人称非虚构叙事，作者可以观察和分析，但不能冒充嘉宾说“我”。开篇从访谈中真实出现的一个场景、动作、语气、矛盾或决定切入，不写概括式导语；随后以2至4次关键选择或转折构成叙事弧线，把经历、性格张力、行动方式和代价交织起来，不能按年份罗列履历，也不能把观点逐条复述。每节必须既有可感知的具体经历，也有克制的第三人称解释；直接引语只能来自稿本。结尾回到人物尚未解决的问题、仍在坚持的价值或下一步处境。禁止使用自传口吻，禁止写成观点议论文。`,
     first_person:
-      "嘉宾第一人称自述。全文只能采用被采访者的‘我’来讲述，删除主持人声音和第三人称记者评论，也不要出现‘他/她认为’式旁观叙述。按嘉宾在访谈中亲自讲述的记忆、选择、犹豫、代价和领悟重组为一篇有时间流动的自述；保留口语的个性与情绪，但压缩重复和语气词。只能把嘉宾明确表达过的内容改写成第一人称，绝不能替嘉宾补写未说过的心理、动机、场景或结论。结尾应像嘉宾对当下处境的自我回答，而不是媒体评价。",
+      `你正在单独创作“嘉宾第一人称自述”，叙述者只能是${primaryGuest}。文章回答“我如何回望自己的经历、选择与代价”。从标题、导语到正文都要像嘉宾本人完成的一篇自传性文章：主体叙述持续使用“我”，不得出现“嘉宾认为”“他/她表示”“作为被采访者”等外部记者口吻，也不得把主持人${interviewers.join("、") || "的"}的问题或经历写成“我”的人生。按记忆触发、关键选择、遭遇的阻力、付出的代价、今天的理解组织出清晰时间流动，保留嘉宾的语言个性与情绪，但删除重复、口头禅和问答痕迹。只能改写嘉宾在稿本中明确表达的事实、感受和判断，绝不能代写其未说过的内心活动、动机、场景或结论。结尾必须是“我”对当下处境或未来选择的自我回答。禁止第三人称人物评价，禁止写成媒体人物特写。`,
     insight_essay:
-      "深度文章。必须以本期访谈揭示的核心问题或认知冲突为中心，而不是按人物生平顺序写传记，也不能冒充嘉宾第一人称。开头提出一个具体问题；正文建立清晰论点，用访谈中的经历、观点与细节作为论据，至少呈现一处矛盾、限制条件或反面可能，再把个体经验推向更普遍的职业、关系、创作或社会观察；人物是论证材料而不是文章唯一主角。结尾给出有边界的判断或值得继续追问的问题，避免鸡汤式升华。"
+      `你正在单独创作“深度文章”。文章不是${primaryGuest}的生平介绍，也不是其第一人称自传，而是从访谈中选择一个最有解释力、最值得展开的核心观点或认知冲突，回答“这个观点在什么条件下成立，它解释了什么，又忽略了什么”。开篇提出一个具体问题或反常识判断；随后建立清楚的中心论点，每一节承担不同的论证任务，用${primaryGuest}在访谈中的经历、观点、细节和后果作为证据，而不是按时间讲完其人生。至少分析一处矛盾、限制条件、反例或可能的反对意见，再把个人经验推向更普遍的职业、关系、创作或社会观察。作者使用分析性第三人称，不冒充嘉宾说“我”，也不对人物作传记式赞颂。结尾给出有边界的结论或值得继续追问的问题，禁止鸡汤式升华和空泛总结。`
   };
   const lengthTargets = {
     short: "约800至1200字",
@@ -1769,9 +1780,11 @@ async function generateRemix(payload = {}) {
       properties: {
         title: { type: "string" },
         deck: { type: "string" },
+        mode: { type: "string", enum: [style] },
         sections: {
           type: "array",
           minItems: 3,
+          maxItems: 7,
           items: {
             type: "object",
             additionalProperties: false,
@@ -1779,7 +1792,8 @@ async function generateRemix(payload = {}) {
               heading: { type: "string" },
               paragraphs: {
                 type: "array",
-                minItems: 1,
+                minItems: 2,
+                maxItems: 5,
                 items: { type: "string" }
               }
             },
@@ -1788,18 +1802,131 @@ async function generateRemix(payload = {}) {
         },
         disclaimer: { type: "string" }
       },
-      required: ["title", "deck", "sections", "disclaimer"]
+      required: ["title", "deck", "mode", "sections", "disclaimer"]
     },
     instructions:
-      `你是中文非虚构写作编辑。写作形式：${styleInstructions[style] || styleInstructions.profile}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。文章要像完整作品而不是摘要，保留人物观点的细节、冲突与转折。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自逐字稿。sections 应有3至7节，每节 heading 使用12至28个汉字，写成信息充分、具有叙事张力的小标题，不能只写‘成长’‘转折’‘选择’等空泛短词；paragraphs 是2至5个完整自然段。不要在段落中使用 Markdown 标题、项目符号或编号。各节之间要形成清晰推进，而不是把摘要机械拆开。disclaimer 简短说明改写边界。`,
+      `${styleInstructions[style]}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。这是一次完整文章创作，不是访谈摘要、提纲或问答整理。必须有明确开篇、持续推进的中段和有回响的结尾；相邻段落之间要有因果、时间、转折或论证关系，不能把互不相干的句子拼在一起。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自稿本。sections 应有3至7节，每节 heading 使用12至28个汉字，写成信息充分、具有叙事或论证张力的小标题，不能只写“成长”“转折”“选择”等空泛短词；每节 paragraphs 是2至5个完整自然段，每段至少包含两句意义连贯的中文。不要在段落中使用 Markdown 标题、项目符号、编号、时间戳或说话人标签。各节之间必须形成清晰推进。mode 必须严格返回 ${style}。disclaimer 简短说明改写边界。`,
     input: JSON.stringify({
+      taskMode: style,
+      primaryGuest,
+      interviewees,
+      interviewers,
       videoTitle: payload.video?.title || "",
-      transcript
+      transcript,
+      otherModeSamples: (Array.isArray(payload.referenceRemixes)
+        ? payload.referenceRemixes
+        : []).slice(0, 2)
     }),
-    temperature: 0.55,
-    maxTokens: 8000
+    temperature: 0.42,
+    maxTokens: 8000,
+    validateResult: (value) => remixValidationIssues(
+      value,
+      style,
+      length,
+      payload.referenceRemixes
+    )
   });
   return { ok: true, remix: result };
+}
+
+function remixValidationIssues(result, style, length, referenceRemixes = []) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return ["结果不是文章对象"];
+  }
+  const issues = [];
+  if (result.mode !== style) issues.push(`叙事模式必须为 ${style}`);
+  if (String(result.title || "").trim().length < 6) issues.push("文章标题过短");
+  if (String(result.deck || "").trim().length < 25) issues.push("导语没有建立文章问题");
+  const sections = Array.isArray(result.sections) ? result.sections : [];
+  if (sections.length < 3) issues.push("文章结构不足三节");
+  const headings = [];
+  const paragraphs = [];
+  for (const section of sections) {
+    const heading = String(section?.heading || "").replace(/\s+/gu, "").trim();
+    headings.push(heading);
+    if (heading.length < 10) issues.push(`小标题“${heading || "空"}”过短`);
+    const sectionParagraphs = Array.isArray(section?.paragraphs)
+      ? section.paragraphs.map((paragraph) => String(paragraph || "").trim()).filter(Boolean)
+      : [];
+    if (sectionParagraphs.length < 2) {
+      issues.push(`“${heading || "未命名小节"}”不足两个自然段`);
+    }
+    for (const paragraph of sectionParagraphs) {
+      paragraphs.push(paragraph);
+      if (paragraph.replace(/\s+/gu, "").length < 55) {
+        issues.push(`“${heading || "未命名小节"}”存在过短段落`);
+      }
+      if (!/[。！？][^。！？]*[。！？]/u.test(paragraph)) {
+        issues.push(`“${heading || "未命名小节"}”的段落不像完整文章段落`);
+      }
+    }
+  }
+  const body = paragraphs.join("\n");
+  const compactLength = body.replace(/\s+/gu, "").length;
+  const minimumLength = ({ short: 650, medium: 1200, long: 2000 })[length] || 1200;
+  if (compactLength < minimumLength) {
+    issues.push(`正文过短，至少需要约 ${minimumLength} 个汉字`);
+  }
+
+  const firstPersonOpenings = paragraphs.filter((paragraph) =>
+    /^(?:“|「)?我/u.test(paragraph)
+  ).length;
+  const externalNarratorPhrases = (
+    body.match(/(?:嘉宾认为|嘉宾表示|被采访者|他认为|她认为|他表示|她表示)/gu) || []
+  ).length;
+  if (style === "first_person") {
+    const firstPersonMentions = (body.match(/我/gu) || []).length;
+    if (firstPersonMentions < Math.max(6, paragraphs.length)) {
+      issues.push("第一人称“我”的叙述密度不足，不像嘉宾自传");
+    }
+    if (externalNarratorPhrases > 1) {
+      issues.push("混入了第三人称记者或嘉宾评价视角");
+    }
+  } else if (firstPersonOpenings > 1) {
+    issues.push("第三人称文章混入了连续第一人称自述");
+  }
+  if (style === "insight_essay") {
+    const reasoningMarkers = (
+      body.match(/(?:因为|因此|但是|然而|意味着|关键在于|问题在于|如果|并非|反而|前提|代价)/gu) || []
+    ).length;
+    if (reasoningMarkers < 5) {
+      issues.push("论证连接不足，仍像人物摘要而不是深度文章");
+    }
+  }
+
+  const opening = paragraphs.slice(0, 2).join("").slice(0, 900);
+  for (const reference of Array.isArray(referenceRemixes) ? referenceRemixes : []) {
+    const referenceOpening = String(reference?.opening || "");
+    if (
+      referenceOpening &&
+      characterNgramSimilarity(opening, referenceOpening, 3) >= 0.72
+    ) {
+      issues.push("开篇与另一写作模式过于相似，必须更换视角和文章骨架");
+      break;
+    }
+  }
+  return [...new Set(issues)].slice(0, 8);
+}
+
+function characterNgramSimilarity(left, right, size = 3) {
+  const normalize = (value) => String(value || "")
+    .replace(/[\s，。！？、；：“”‘’（）()《》…—-]/gu, "");
+  const toNgrams = (value) => {
+    const text = normalize(value);
+    const grams = new Set();
+    for (let index = 0; index <= text.length - size; index += 1) {
+      grams.add(text.slice(index, index + size));
+    }
+    return grams;
+  };
+  const leftGrams = toNgrams(left);
+  const rightGrams = toNgrams(right);
+  if (!leftGrams.size || !rightGrams.size) return 0;
+  let intersection = 0;
+  for (const gram of leftGrams) {
+    if (rightGrams.has(gram)) intersection += 1;
+  }
+  return intersection / Math.min(leftGrams.size, rightGrams.size);
 }
 
 async function askPodcast(payload = {}) {
