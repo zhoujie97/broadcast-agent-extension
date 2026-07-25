@@ -8,6 +8,18 @@
   },
   "rewrites": [
     {
+      "source": "/",
+      "destination": "/docs/index.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/docs/privacy.html"
+    },
+    {
+      "source": "/support",
+      "destination": "/docs/support.html"
+    },
+    {
       "source": "/health",
       "destination": "/api/health"
     },
