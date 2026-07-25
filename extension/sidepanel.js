@@ -473,14 +473,14 @@ function transcriptForAi() {
 }
 
 async function loadWorkspaceData() {
-  const overviewKey = videoStorageKey("contentMapV4");
+  const overviewKey = videoStorageKey("contentMapV5");
   const notesKey = videoStorageKey("timelineNotes");
   const remixKey = videoStorageKey(
-    "remix",
+    "remixV2",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const followupKey = videoStorageKey("followupV3");
-  const clipsKey = videoStorageKey("contentValueRadarV4");
+  const clipsKey = videoStorageKey("contentValueRadarV5");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
     overviewKey, notesKey, remixKey, followupKey, clipsKey, clipFavoritesKey
@@ -527,7 +527,7 @@ async function generateOverview() {
     }
     renderOverview(response.overview);
     await chrome.storage.local.set({
-      [videoStorageKey("contentMapV4")]: response.overview
+      [videoStorageKey("contentMapV5")]: response.overview
     });
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
@@ -637,14 +637,18 @@ function renderLifePaths(trajectories) {
     for (const event of trajectory.events) {
       const item = document.createElement("li");
       item.className = `life-event${event.turningPoint ? " turning-point" : ""}`;
-      const period = document.createElement("span");
-      period.className = "life-period";
-      period.textContent = displayLifePeriod(event.period);
       const eventTitle = document.createElement("h5");
       eventTitle.textContent = event.title || "重要经历";
       const description = document.createElement("p");
       description.textContent = event.description || "";
-      item.append(period, eventTitle, description);
+      const displayPeriod = displayLifePeriod(event.period);
+      if (displayPeriod) {
+        const period = document.createElement("span");
+        period.className = "life-period";
+        period.textContent = displayPeriod;
+        item.append(period);
+      }
+      item.append(eventTitle, description);
       const mentionedAt = Number(event.mentionedAt);
       if (Number.isFinite(mentionedAt) && mentionedAt >= 0) {
         const jump = document.createElement("button");
@@ -667,8 +671,8 @@ function displayLifePeriod(value) {
     .trim();
   return (
     period &&
-    !/^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定)$/u.test(period)
-  ) ? period : "阶段未明";
+    !/^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定|阶段未明|时间不详)$/u.test(period)
+  ) ? period : "";
 }
 
 function renderThoughtFragments(fragments) {
@@ -722,7 +726,7 @@ async function generateClipCandidates() {
     }
     renderClipCandidates(response.clips);
     await chrome.storage.local.set({
-      [videoStorageKey("contentValueRadarV4")]: response.clips
+      [videoStorageKey("contentValueRadarV5")]: response.clips
     });
     elements.generateClipsButton.textContent = "重新分析内容价值";
   } catch (error) {
@@ -834,38 +838,13 @@ function createClipCard(clip) {
   plan.append(
     createClipScoreAnalysis(clip),
     createScenarioAnalysis(clip),
-    clipPlanRow("短视频开场", clip.hook),
     clipPlanRow("话题", (clip.topics || []).map((topic) => `#${topic}`).join(" ")),
     clipPlanRow("BGM", clip.bgmSuggestion)
   );
   details.append(summary, plan);
-
-  const actions = document.createElement("div");
-  actions.className = "clip-actions";
-  const preview = document.createElement("button");
-  preview.type = "button";
-  preview.className = "clip-preview-button";
-  preview.textContent = "循环预览";
-  preview.addEventListener("click", () => toggleClipPreview(clip));
-  const favorite = document.createElement("button");
-  favorite.type = "button";
-  favorite.className = "clip-favorite-button";
-  favorite.setAttribute("aria-pressed", String(favoriteClipIds.has(clip.id)));
-  favorite.textContent = favoriteClipIds.has(clip.id) ? "★ 已收藏" : "☆ 收藏";
-  favorite.addEventListener("click", () => toggleFavoriteClip(clip, favorite));
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.textContent = "复制方案";
-  copy.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(formatClipPlan(clip));
-    const original = copy.textContent;
-    copy.textContent = "已复制";
-    window.setTimeout(() => { copy.textContent = original; }, 1200);
-  });
-  actions.append(preview, favorite, copy);
   card.append(top, title, range, quote, reason);
   if (signals.childElementCount) card.append(signals);
-  card.append(details, actions);
+  card.append(details);
   return card;
 }
 
@@ -972,10 +951,7 @@ function createScenarioAnalysis(clip) {
     const item = document.createElement("article");
     const meta = document.createElement("p");
     meta.className = "clip-scenario-meta";
-    const platformLabel = scenario.type === "短视频传播"
-      ? "抖音 · 短视频"
-      : "小红书 · 文章";
-    meta.textContent = `${platformLabel} · 适配度 ${scenario.fit}`;
+    meta.textContent = `${scenario.type || "内容利用"} · 适配度 ${scenario.fit}`;
     const title = document.createElement("strong");
     title.textContent = scenario.title || clip.title;
     const advice = document.createElement("p");
@@ -1017,7 +993,6 @@ function formatClipPlan(clip) {
     portraitText,
     `内容价值画像：${clip.valuePortrait || ""}`,
     scenarioText,
-    `前3秒钩子：${clip.hook}`,
     `话题：${(clip.topics || []).map((topic) => `#${topic}`).join(" ")}`,
     `BGM：${clip.bgmSuggestion}`
   ].filter(Boolean).join("\n");
@@ -1323,7 +1298,7 @@ async function generateRemix() {
     }
     renderRemix(response.remix);
     await chrome.storage.local.set({
-      [videoStorageKey("remix", `${style}:${length}`)]: response.remix
+      [videoStorageKey("remixV2", `${style}:${length}`)]: response.remix
     });
   } catch (error) {
     elements.remixError.textContent = error.message;
@@ -1336,7 +1311,7 @@ async function generateRemix() {
 async function loadSelectedRemix() {
   if (!currentVideo) return;
   const key = videoStorageKey(
-    "remix",
+    "remixV2",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const stored = await chrome.storage.local.get(key);
@@ -1352,7 +1327,20 @@ function renderRemix(remix) {
   currentRemix = remix;
   elements.remixTitle.textContent = remix.title || "未命名文章";
   elements.remixDeck.textContent = remix.deck || "";
-  elements.remixBody.textContent = remix.body || "";
+  elements.remixBody.replaceChildren();
+  for (const section of normalizeRemixSections(remix)) {
+    const sectionElement = document.createElement("section");
+    sectionElement.className = "article-section";
+    const heading = document.createElement("h3");
+    heading.textContent = section.heading;
+    sectionElement.append(heading);
+    for (const paragraphText of section.paragraphs) {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = paragraphText;
+      sectionElement.append(paragraph);
+    }
+    elements.remixBody.append(sectionElement);
+  }
   elements.remixDisclaimer.textContent = remix.disclaimer ||
     "本文由 AI 基于采访智能稿本重写，未引入稿本之外的事实。";
   elements.remixError.hidden = true;
@@ -1361,13 +1349,65 @@ function renderRemix(remix) {
 
 async function copyRemix() {
   if (!currentRemix) return;
-  const text = [currentRemix.title, currentRemix.deck, currentRemix.body]
-    .filter(Boolean)
+  const sectionText = normalizeRemixSections(currentRemix)
+    .map((section) => [
+      section.heading,
+      ...section.paragraphs
+    ].join("\n\n"))
     .join("\n\n");
-  await navigator.clipboard.writeText(text);
+  const text = [currentRemix.title, currentRemix.deck, sectionText]
+    .filter(Boolean).join("\n\n");
   const original = elements.copyRemixButton.textContent;
-  elements.copyRemixButton.textContent = "已复制";
+  try {
+    await writeClipboardText(text);
+    elements.copyRemixButton.textContent = "copied";
+  } catch (error) {
+    elements.copyRemixButton.textContent = "failed";
+    elements.remixError.textContent = `复制失败：${error.message}`;
+    elements.remixError.hidden = false;
+  }
   window.setTimeout(() => { elements.copyRemixButton.textContent = original; }, 1500);
+}
+
+function normalizeRemixSections(remix = {}) {
+  const structured = (Array.isArray(remix.sections) ? remix.sections : [])
+    .map((section) => ({
+      heading: String(section?.heading || "").trim(),
+      paragraphs: (Array.isArray(section?.paragraphs) ? section.paragraphs : [])
+        .map((paragraph) => String(paragraph || "").trim())
+        .filter(Boolean)
+    }))
+    .filter((section) => section.heading && section.paragraphs.length);
+  if (structured.length) return structured;
+
+  const legacyParagraphs = String(remix.body || "")
+    .split(/\n{2,}/u)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  return legacyParagraphs.length
+    ? [{ heading: "正文", paragraphs: legacyParagraphs }]
+    : [];
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 部分嵌入式扩展页面会拒绝 Clipboard API，继续使用兼容方案。
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("浏览器拒绝了剪贴板写入");
 }
 
 function openNoteDialog() {

@@ -43,9 +43,12 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("clipRadar:") ||
       key.startsWith("clipFavorites:") ||
       key.startsWith("contentValueRadarV3:") ||
+      key.startsWith("contentValueRadarV4:") ||
       key.startsWith("contentMap:") ||
       key.startsWith("contentMapV2:") ||
       key.startsWith("contentMapV3:") ||
+      key.startsWith("contentMapV4:") ||
+      key.startsWith("remix:") ||
       key.startsWith("followupV2:")
     );
   const sessionKeys = Object.keys(sessionValues)
@@ -436,6 +439,7 @@ async function generateOverview(payload = {}) {
     result.interviewers = enriched.interviewers;
     result.interviewees = enriched.interviewees;
   }
+  await enrichMissingLifePeriods(result, webResults).catch(() => {});
   return { ok: true, overview: result };
 }
 
@@ -491,14 +495,13 @@ async function generateClipCandidates(payload = {}) {
                   required: ["type", "fit", "title", "advice"]
                 }
               },
-              hook: { type: "string" },
               topics: { type: "array", items: { type: "string" } },
               bgmSuggestion: { type: "string" }
             },
             required: [
               "from", "to", "type", "title", "quote", "scores", "valuePortrait",
               "whyRecommended", "signals", "scenarios",
-              "hook", "topics", "bgmSuggestion"
+              "topics", "bgmSuggestion"
             ]
           }
         }
@@ -506,7 +509,7 @@ async function generateClipCandidates(payload = {}) {
       required: ["intro", "clips"]
     },
     instructions:
-      "你是长内容价值分析师，不是单纯的短视频剪辑助手。请从完整原声文稿中识别8至10个彼此不重复、最值得观看、理解或二次利用的关键内容节点。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。五项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，practicalInspiration评估能否转化为行动或方法启发，spreadPotential评估传播与讨论潜力。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 只保留短视频传播、深度文章两种场景，分别对应抖音式短视频与小红书式文章，fit只能为高、中、低，并分别给出推荐标题和简短适配建议。hook、topics、bgmSuggestion 仅服务于短视频场景，BGM只写情绪、节奏和进入时机，不推荐具体歌曲。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
+      "你是长内容价值分析师，不是单纯的短视频剪辑助手。请从完整原声文稿中识别8至10个彼此不重复、最值得观看、理解或二次利用的关键内容节点。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。五项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，practicalInspiration评估能否转化为行动或方法启发，spreadPotential评估传播与讨论潜力。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 只保留短视频传播、深度文章两种场景，fit只能为高、中、低，并分别给出推荐标题和简短适配建议，不要出现任何平台名称。topics 和 bgmSuggestion 仅服务于短视频场景。bgmSuggestion 必须先推荐一首真实存在的具体音乐，写明‘曲名 — 作者/艺人或曲库来源’，再补充一句情绪、节奏与进入时机建议；优先选择器乐、公共领域作品或常见免版税音乐，不能确认授权时明确提示商用前核对版权，绝不能编造曲名。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
     input: JSON.stringify({
       videoTitle: payload.video?.title || "",
       duration: Number(payload.video?.duration) || null,
@@ -618,11 +621,13 @@ function normalizeClipCandidates(result, segments) {
           advice: String(scenario.advice || "可根据目标受众补充背景后使用。").trim()
         };
       }),
-      hook: String(raw.hook || "").trim(),
       topics: (Array.isArray(raw.topics) ? raw.topics : [])
         .map((topic) => String(topic || "").replace(/^#+/u, "").trim())
         .filter(Boolean).slice(0, 6),
-      bgmSuggestion: String(raw.bgmSuggestion || "根据内容情绪选择，人物说话时降低音量。").trim()
+      bgmSuggestion: String(
+        raw.bgmSuggestion ||
+        "未找到可可靠核验的具体音乐；可选低存在感器乐，人物说话时降低音量。"
+      ).trim()
     });
   }
   clips.sort((a, b) => b.valueScore - a.valueScore || a.from - b.from);
@@ -1125,11 +1130,104 @@ function normalizeLifePeriod(value) {
     .trim();
   if (
     !period ||
-    /^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定)$/u.test(period)
+    /^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定|阶段未明|时间不详)$/u.test(period)
   ) {
-    return "阶段未明";
+    return "";
   }
   return period;
+}
+
+async function enrichMissingLifePeriods(overview, existingEvidence = []) {
+  const pendingByPerson = new Map();
+  for (const trajectory of Array.isArray(overview?.lifeTrajectories)
+    ? overview.lifeTrajectories
+    : []) {
+    const personName = String(trajectory?.personName || "").trim();
+    for (const event of Array.isArray(trajectory?.events) ? trajectory.events : []) {
+      if (normalizeLifePeriod(event?.period)) continue;
+      if (!personName || !event?.title) continue;
+      if (!pendingByPerson.has(personName)) pendingByPerson.set(personName, []);
+      pendingByPerson.get(personName).push(event);
+    }
+  }
+
+  for (const [personName, events] of [...pendingByPerson.entries()].slice(0, 2)) {
+    const unresolved = events.filter((event) => {
+      const eventTerm = lifeEventSearchTerm(event);
+      const supported = findSupportedLifePeriod(
+        existingEvidence,
+        personName,
+        eventTerm
+      );
+      if (supported) event.period = supported;
+      return !supported;
+    });
+    if (!unresolved.length) continue;
+
+    const terms = unresolved.slice(0, 4).map(lifeEventSearchTerm).filter(Boolean);
+    const query = [`"${personName}"`, ...terms.map((term) => `"${term}"`), "年份"]
+      .join(" ")
+      .slice(0, 100);
+    const searchedEvidence = (await searchWeb(query, 12).catch(() => []))
+      .filter(isUsableResearchEvidence);
+    for (const event of unresolved) {
+      const supported = findSupportedLifePeriod(
+        searchedEvidence,
+        personName,
+        lifeEventSearchTerm(event)
+      );
+      if (supported) event.period = supported;
+    }
+  }
+}
+
+function lifeEventSearchTerm(event) {
+  const title = String(event?.title || "").trim();
+  return title.match(/《([^》]{2,30})》/u)?.[1] || title.slice(0, 24);
+}
+
+function findSupportedLifePeriod(results, personName, eventTerm) {
+  const currentYear = new Date().getFullYear() + 1;
+  const normalizedPerson = normalizeComparableTitle(personName);
+  const normalizedEvent = normalizeComparableTitle(eventTerm);
+  const candidates = new Map();
+
+  for (const result of results) {
+    const text = `${result.title || ""}。${result.content || ""}`;
+    const matches = text.matchAll(
+      /((?:19|20)\d{2})年(?:\s*(\d{1,2})月)?/gu
+    );
+    for (const match of matches) {
+      const year = Number(match[1]);
+      if (year < 1900 || year > currentYear) continue;
+      const index = Number(match.index) || 0;
+      const context = normalizeComparableTitle(
+        text.slice(Math.max(0, index - 70), index + match[0].length + 70)
+      );
+      const personHit = normalizedPerson && context.includes(normalizedPerson);
+      const eventHit = normalizedEvent && context.includes(normalizedEvent);
+      if (!personHit && !eventHit) continue;
+      const period = match[2] ? `${year}年${Number(match[2])}月` : `${year}年`;
+      const evidenceWeight = Math.max(1, researchSourceScore(result));
+      const contextWeight = (personHit ? 2 : 0) + (eventHit ? 4 : 0);
+      const current = candidates.get(period) || {
+        score: 0,
+        sources: new Set(),
+        maxAuthority: 0
+      };
+      current.score += evidenceWeight + contextWeight;
+      current.sources.add(result.url);
+      current.maxAuthority = Math.max(current.maxAuthority, evidenceWeight);
+      candidates.set(period, current);
+    }
+  }
+
+  const [bestPeriod, support] = [...candidates.entries()]
+    .sort((a, b) => b[1].score - a[1].score)[0] || [];
+  if (!support) return "";
+  const authoritative = support.maxAuthority >= 5 && support.score >= 7;
+  const corroborated = support.sources.size >= 2 && support.score >= 10;
+  return authoritative || corroborated ? bestPeriod : "";
 }
 
 function personProfileSchema() {
@@ -1662,13 +1760,29 @@ async function generateRemix(payload = {}) {
       properties: {
         title: { type: "string" },
         deck: { type: "string" },
-        body: { type: "string" },
+        sections: {
+          type: "array",
+          minItems: 3,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              heading: { type: "string" },
+              paragraphs: {
+                type: "array",
+                minItems: 1,
+                items: { type: "string" }
+              }
+            },
+            required: ["heading", "paragraphs"]
+          }
+        },
         disclaimer: { type: "string" }
       },
-      required: ["title", "deck", "body", "disclaimer"]
+      required: ["title", "deck", "sections", "disclaimer"]
     },
     instructions:
-      `你是中文非虚构写作编辑。写作形式：${styleInstructions[style] || styleInstructions.profile}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。文章要像完整作品而不是摘要，保留人物观点的细节、冲突与转折。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自逐字稿。body 使用自然段纯文本，不要 Markdown 标题符号。disclaimer 简短说明改写边界。`,
+      `你是中文非虚构写作编辑。写作形式：${styleInstructions[style] || styleInstructions.profile}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。文章要像完整作品而不是摘要，保留人物观点的细节、冲突与转折。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自逐字稿。sections 应有3至7节，每节 heading 是简洁、有叙事意味的小标题，paragraphs 是2至5个完整自然段；不要在段落中使用 Markdown 标题、项目符号或编号。各节之间要形成清晰推进，而不是把摘要机械拆开。disclaimer 简短说明改写边界。`,
     input: JSON.stringify({
       videoTitle: payload.video?.title || "",
       transcript

@@ -870,6 +870,53 @@ h2 {
   }
 }
 
+/* Keep the reading action in document flow so it never covers the transcript. */
+.back-to-top-button {
+  position: static;
+  display: block;
+  width: fit-content;
+  margin: 18px 0 4px auto;
+  padding: 6px 10px;
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.remix-output-header .copy-remix-button {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+.article-body {
+  display: grid;
+  gap: 20px;
+  white-space: normal;
+}
+
+.article-section {
+  display: grid;
+  gap: 10px;
+}
+
+.article-section h3 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.article-section p {
+  margin: 0;
+  color: var(--foreground);
+  line-height: 1.85;
+}
+
 .overview-summary-card {
   padding: 15px;
   border: 1px solid var(--border);
