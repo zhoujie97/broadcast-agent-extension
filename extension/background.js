@@ -42,8 +42,10 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("polishedTranscript:") ||
       key.startsWith("clipRadar:") ||
       key.startsWith("clipFavorites:") ||
+      key.startsWith("contentValueRadarV3:") ||
       key.startsWith("contentMap:") ||
-      key.startsWith("contentMapV2:")
+      key.startsWith("contentMapV2:") ||
+      key.startsWith("contentMapV3:")
     );
   const sessionKeys = Object.keys(sessionValues)
     .filter((key) => key.startsWith("speakerLabels:"));
@@ -268,7 +270,7 @@ function simpleTextHash(text) {
 
 async function generateOverview(payload = {}) {
   const segments = requireTranscriptSegments(payload.segments);
-  const transcript = prepareTranscriptForAi(segments);
+  const transcript = prepareTranscriptForAi(segments, 140000);
   const videoTitle = payload.video?.title || "";
   const webResults = await searchWeb(
     `${videoTitle.slice(0, 46)} ${payload.video?.publisher || ""} 嘉宾 简介`,
@@ -405,7 +407,8 @@ async function generateOverview(payload = {}) {
       webResults
     }),
     temperature: 0.2,
-    maxTokens: 6000
+    maxTokens: 6000,
+    validateResult: contentMapValidationIssues
   });
   const allowedUrls = new Set(webResults.map((item) => item.url));
   canonicalizePeopleFromVideo(result, payload.video);
@@ -416,6 +419,13 @@ async function generateOverview(payload = {}) {
     ...webResults.flatMap((item) => [item.title || "", item.content || ""])
   ].join(" "));
   normalizeContentMapResult(result, transcript);
+  const normalizedIssues = contentMapValidationIssues(result);
+  if (normalizedIssues.length) {
+    throw createError(
+      "AI_CONTENT_MAP_INCOMPLETE",
+      `AI 返回的内容地图不完整：${normalizedIssues.join("；")}。请稍后重试。`
+    );
+  }
   result.interviewers = filterPersonSourceLinks(result.interviewers, allowedUrls)
     .map((person) => validateHighRiskFacts(person, webResults));
   result.interviewees = filterPersonSourceLinks(result.interviewees, allowedUrls)
@@ -430,7 +440,7 @@ async function generateOverview(payload = {}) {
 
 async function generateClipCandidates(payload = {}) {
   const segments = requireTranscriptSegments(payload.segments);
-  const transcript = prepareTranscriptForAi(segments);
+  const transcript = prepareTranscriptForHighlights(segments);
   const result = await callAiJson({
     schemaName: "clip_candidates",
     schema: {
@@ -502,12 +512,20 @@ async function generateClipCandidates(payload = {}) {
       transcript
     }),
     temperature: 0.3,
-    maxTokens: 8000
+    maxTokens: 8000,
+    validateResult: clipCandidateValidationIssues
   });
 
+  const normalized = normalizeClipCandidates(result, segments);
+  if (normalized.clips.length < 5) {
+    throw createError(
+      "AI_CLIP_RESULT_INCOMPLETE",
+      "AI 返回的有效高光区间不足 5 个，结果未保存。请稍后重试。"
+    );
+  }
   return {
     ok: true,
-    clips: normalizeClipCandidates(result, segments)
+    clips: normalized
   };
 }
 
@@ -614,15 +632,53 @@ function normalizeClipCandidates(result, segments) {
   };
 }
 
+function clipCandidateValidationIssues(result) {
+  const issues = [];
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return ["结果不是对象"];
+  }
+  if (String(result.intro || "").trim().length < 12) {
+    issues.push("缺少内容价值总览");
+  }
+  const clips = Array.isArray(result.clips) ? result.clips : [];
+  const validClips = clips.filter((clip) =>
+    Number.isFinite(Number(clip?.from)) &&
+    Number.isFinite(Number(clip?.to)) &&
+    Number(clip.to) > Number(clip.from) + 3 &&
+    String(clip?.title || "").trim().length >= 4 &&
+    String(clip?.whyRecommended || "").trim().length >= 12
+  );
+  if (validClips.length < 6) {
+    issues.push(`有效高光区间不足 6 个（当前 ${validClips.length} 个）`);
+  }
+  return issues;
+}
+
 function canonicalizePeopleFromVideo(overview, video = {}) {
   const title = String(video.title || "");
   const publisher = String(video.publisher || "").trim();
-  const guestHint = title.match(/(?:听|访谈|对话)([\p{Script=Han}]{2,4})(?:讲|聊|谈|：|:|\s)/u)?.[1];
+  const titleHints = extractPeopleHintsFromTitle(title);
+  const guestHint = titleHints.interviewee ||
+    title.match(/(?:听|访谈|对话)([\p{Script=Han}]{2,4})(?:讲|聊|谈|：|:|\s)/u)?.[1];
+  const interviewerHint = titleHints.interviewer;
   if (guestHint && (!Array.isArray(overview.interviewees) || overview.interviewees.length === 0)) {
     overview.interviewees = [emptyPersonProfile(guestHint, "被采访者")];
   }
   if (guestHint && Array.isArray(overview.interviewees) && overview.interviewees.length === 1) {
     overview.interviewees[0].name = guestHint;
+  }
+  if (
+    interviewerHint &&
+    (!Array.isArray(overview.interviewers) || overview.interviewers.length === 0)
+  ) {
+    overview.interviewers = [emptyPersonProfile(interviewerHint, "采访者")];
+  }
+  if (
+    interviewerHint &&
+    Array.isArray(overview.interviewers) &&
+    overview.interviewers.length === 1
+  ) {
+    overview.interviewers[0].name = interviewerHint;
   }
   if (
     /^[\p{Script=Han}]{2,4}$/u.test(publisher) &&
@@ -637,6 +693,32 @@ function canonicalizePeopleFromVideo(overview, video = {}) {
   ) {
     overview.interviewers[0].name = publisher;
   }
+}
+
+function extractPeopleHintsFromTitle(title) {
+  const normalized = String(title || "")
+    .replace(/[《》【】]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const directedSpeech = normalized.match(
+    /([\p{Script=Han}]{2,4})(?:给|向|对)([\p{Script=Han}]{2,4})(?:说|讲|聊|谈|问)/u
+  );
+  if (directedSpeech) {
+    return {
+      interviewee: directedSpeech[1],
+      interviewer: directedSpeech[2]
+    };
+  }
+  const hostDialogue = normalized.match(
+    /([\p{Script=Han}]{2,4})(?:专访|访谈|对话)([\p{Script=Han}]{2,4})/u
+  );
+  if (hostDialogue) {
+    return {
+      interviewer: hostDialogue[1],
+      interviewee: hostDialogue[2]
+    };
+  }
+  return { interviewer: "", interviewee: "" };
 }
 
 function emptyPersonProfile(name, role) {
@@ -903,6 +985,50 @@ function sanitizeUnsupportedContentMapYears(overview, evidenceText) {
         description: stripUnsupportedYears(event?.description, evidenceText)
       }));
   }
+}
+
+function contentMapValidationIssues(overview) {
+  if (!overview || typeof overview !== "object" || Array.isArray(overview)) {
+    return ["结果不是对象"];
+  }
+  const issues = [];
+  if (String(overview.oneLiner || "").trim().length < 12) {
+    issues.push("缺少本期一句话总览");
+  }
+  if (String(overview.summary || "").trim().length < 80) {
+    issues.push("主线概括不足 80 字");
+  }
+  const chapters = Array.isArray(overview.chapters) ? overview.chapters : [];
+  const validChapters = chapters.filter((chapter) =>
+    Number.isFinite(Number(chapter?.from)) &&
+    Number.isFinite(Number(chapter?.to)) &&
+    Number(chapter.to) > Number(chapter.from) &&
+    String(chapter?.title || "").trim().length >= 4 &&
+    String(chapter?.content || "").trim().length >= 50
+  );
+  if (validChapters.length < 4) {
+    issues.push(`有效主题章节不足 4 个（当前 ${validChapters.length} 个）`);
+  }
+  const fragments = Array.isArray(overview.thoughtFragments)
+    ? overview.thoughtFragments
+    : [];
+  const peopleNames = [
+    ...(Array.isArray(overview.interviewers) ? overview.interviewers : []),
+    ...(Array.isArray(overview.interviewees) ? overview.interviewees : [])
+  ].map((person) => String(person?.name || "").trim()).filter(Boolean);
+  const personLedPattern =
+    /^(?:他|她|我|我们|他们|她们|嘉宾|主持人|采访者|被采访者)(?:在|的|认为|提到|表示|觉得|通过|选择|经历|说|谈到)?/u;
+  const validFragments = fragments.filter((fragment) =>
+    String(fragment?.statement || "").replace(/\s+/gu, "").length >= 18 &&
+    !personLedPattern.test(String(fragment?.statement || "").trim()) &&
+    !peopleNames.some((name) =>
+      String(fragment?.statement || "").trim().startsWith(name)
+    )
+  );
+  if (validFragments.length < 3) {
+    issues.push(`有效思想碎片不足 3 条（当前 ${validFragments.length} 条）`);
+  }
+  return issues;
 }
 
 function normalizeContentMapResult(overview, transcript) {
@@ -1701,6 +1827,64 @@ function prepareTranscriptForAi(segments, maxCharacters = 220000) {
   return sampled;
 }
 
+function prepareTranscriptForHighlights(segments, maxCharacters = 90000) {
+  const normalized = segments.map(toAiSegment);
+  const characterCost = (segment) =>
+    String(segment.text || "").length + 60;
+  const totalCharacters = normalized.reduce(
+    (sum, segment) => sum + characterCost(segment),
+    0
+  );
+  if (totalCharacters <= maxCharacters) return normalized;
+
+  const selectedIndexes = new Set();
+  const coverageStride = Math.max(1, Math.ceil(normalized.length / 80));
+  for (let index = 0; index < normalized.length; index += coverageStride) {
+    selectedIndexes.add(index);
+  }
+  selectedIndexes.add(normalized.length - 1);
+
+  const signalPattern =
+    /(?:但是|然而|后来|没想到|第一次|最后|真正|最重要|问题是|代价|后悔|失败|成功|害怕|愤怒|崩溃|决定|选择|改变|为什么|意味着|本质|其实|原来|直到)/gu;
+  const ranked = normalized.map((segment, index) => {
+    const text = String(segment.text || "");
+    const signalCount = text.match(signalPattern)?.length || 0;
+    const punctuationCount = text.match(/[！？“”]/gu)?.length || 0;
+    return {
+      index,
+      score:
+        Math.min(text.length, 800) +
+        signalCount * 90 +
+        punctuationCount * 24
+    };
+  }).sort((a, b) => b.score - a.score);
+
+  let usedCharacters = [...selectedIndexes].reduce(
+    (sum, index) => sum + characterCost(normalized[index]),
+    0
+  );
+  for (const candidate of ranked) {
+    if (usedCharacters >= maxCharacters) break;
+    for (const index of [candidate.index - 1, candidate.index, candidate.index + 1]) {
+      if (
+        index < 0 ||
+        index >= normalized.length ||
+        selectedIndexes.has(index)
+      ) {
+        continue;
+      }
+      const nextCost = characterCost(normalized[index]);
+      if (usedCharacters + nextCost > maxCharacters) continue;
+      selectedIndexes.add(index);
+      usedCharacters += nextCost;
+    }
+  }
+
+  return [...selectedIndexes]
+    .sort((a, b) => a - b)
+    .map((index) => normalized[index]);
+}
+
 function toAiSegment(segment) {
   return {
     id: segment.id,
@@ -1717,7 +1901,8 @@ async function callAiJson({
   instructions,
   input,
   temperature,
-  maxTokens = AI_CONFIG.defaultMaxTokens
+  maxTokens = AI_CONFIG.defaultMaxTokens,
+  validateResult
 }) {
   const systemPrompt =
     `${instructions}\n你必须只返回一个符合以下 JSON Schema 的 JSON 对象。` +
@@ -1744,7 +1929,10 @@ async function callAiJson({
   }
 
   let parsed = tryParseModelJson(outputText);
-  if (parsed.ok) {
+  let validationIssues = parsed.ok
+    ? normalizeValidationIssues(validateResult, parsed.value)
+    : ["回复不是有效 JSON"];
+  if (parsed.ok && validationIssues.length === 0) {
     return parsed.value;
   }
 
@@ -1755,7 +1943,8 @@ async function callAiJson({
       {
         role: "user",
         content:
-          "上一条回复不是有效 JSON。请重新完成原任务，只输出 JSON 对象；不要复述、解释或道歉。"
+          `上一条回复不符合要求：${validationIssues.join("；")}。` +
+          "请重新完成原任务，补齐所有必需内容，只输出 JSON 对象；不要复述、解释或道歉。"
       }
     ],
     temperature: 0,
@@ -1765,14 +1954,17 @@ async function callAiJson({
   });
   outputText = extractChatCompletionText(payload);
   parsed = tryParseModelJson(outputText);
-  if (parsed.ok) {
+  validationIssues = parsed.ok
+    ? normalizeValidationIssues(validateResult, parsed.value)
+    : ["回复不是有效 JSON"];
+  if (parsed.ok && validationIssues.length === 0) {
     return parsed.value;
   }
 
   const outputPreview = safeOutputPreview(outputText);
   throw createError(
-    "AI_PROXY_INVALID_JSON",
-    `云端 AI 连续两次没有返回有效 JSON。` +
+    parsed.ok ? "AI_PROXY_INCOMPLETE_RESULT" : "AI_PROXY_INVALID_JSON",
+    `云端 AI 连续两次没有返回完整结果：${validationIssues.join("；")}。` +
       (outputPreview ? ` 模型回复：${outputPreview}` : ""),
     {
       responseId: payload.id,
@@ -1780,6 +1972,20 @@ async function callAiJson({
       outputPreview
     }
   );
+}
+
+function normalizeValidationIssues(validateResult, value) {
+  if (typeof validateResult !== "function") return [];
+  try {
+    const result = validateResult(value);
+    if (result === true || result == null) return [];
+    if (result === false) return ["结果未通过完整性校验"];
+    return (Array.isArray(result) ? result : [result])
+      .map((issue) => String(issue || "").trim())
+      .filter(Boolean);
+  } catch {
+    return ["结果完整性校验失败"];
+  }
 }
 
 async function requestAiProxyCompletion({

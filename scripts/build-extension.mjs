@@ -12,7 +12,7 @@ const releaseVersion = String(process.env.RELEASE_VERSION || "1.0.0").trim();
 
 if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?(?:\/.*)?$/iu.test(apiBaseUrl)) {
   throw new Error(
-    "API_BASE_URL 必须是已部署代理的 HTTPS 地址，例如 https://example.onrender.com"
+    "API_BASE_URL 必须是已部署代理的 HTTPS 地址，例如 https://example.vercel.app"
   );
 }
 if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/u.test(releaseVersion)) {

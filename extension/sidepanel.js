@@ -473,23 +473,25 @@ function transcriptForAi() {
 }
 
 async function loadWorkspaceData() {
-  const overviewKey = videoStorageKey("contentMapV3");
+  const overviewKey = videoStorageKey("contentMapV4");
   const notesKey = videoStorageKey("timelineNotes");
   const remixKey = videoStorageKey(
     "remix",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const followupKey = videoStorageKey("followupV2");
-  const clipsKey = videoStorageKey("contentValueRadarV3");
+  const clipsKey = videoStorageKey("contentValueRadarV4");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
     overviewKey, notesKey, remixKey, followupKey, clipsKey, clipFavoritesKey
   ]);
   notes = Array.isArray(stored[notesKey]) ? stored[notesKey] : [];
   renderNotes();
-  if (stored[overviewKey]) {
+  if (stored[overviewKey] && isRenderableContentMap(stored[overviewKey])) {
     renderOverview(stored[overviewKey]);
     elements.generateOverviewButton.textContent = "重新生成内容地图";
+  } else if (stored[overviewKey]) {
+    await chrome.storage.local.remove(overviewKey);
   }
   if (stored[remixKey]) {
     renderRemix(stored[remixKey]);
@@ -501,9 +503,11 @@ async function loadWorkspaceData() {
   favoriteClipIds = new Set(Array.isArray(stored[clipFavoritesKey])
     ? stored[clipFavoritesKey]
     : []);
-  if (stored[clipsKey]) {
+  if (stored[clipsKey] && isRenderableClipRadar(stored[clipsKey])) {
     renderClipCandidates(stored[clipsKey]);
     elements.generateClipsButton.textContent = "重新分析内容价值";
+  } else if (stored[clipsKey]) {
+    await chrome.storage.local.remove(clipsKey);
   }
 }
 
@@ -523,7 +527,7 @@ async function generateOverview() {
     }
     renderOverview(response.overview);
     await chrome.storage.local.set({
-      [videoStorageKey("contentMapV3")]: response.overview
+      [videoStorageKey("contentMapV4")]: response.overview
     });
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
@@ -534,7 +538,29 @@ async function generateOverview() {
   }
 }
 
+function isRenderableContentMap(overview) {
+  if (!overview || typeof overview !== "object") return false;
+  const chapters = Array.isArray(overview.chapters) ? overview.chapters : [];
+  const fragments = Array.isArray(overview.thoughtFragments)
+    ? overview.thoughtFragments
+    : [];
+  return (
+    String(overview.oneLiner || "").trim().length >= 12 &&
+    String(overview.summary || "").trim().length >= 80 &&
+    chapters.filter((chapter) =>
+      String(chapter?.title || "").trim() &&
+      String(chapter?.content || "").trim()
+    ).length >= 4 &&
+    fragments.filter((fragment) =>
+      String(fragment?.statement || "").trim().length >= 18
+    ).length >= 3
+  );
+}
+
 function renderOverview(overview) {
+  if (!isRenderableContentMap(overview)) {
+    throw new Error("内容地图结果不完整，未保存空结果。请重新生成。");
+  }
   currentOverview = overview;
   elements.overviewOneLiner.textContent = overview.oneLiner || "";
   elements.overviewSummary.textContent = overview.summary || "";
@@ -685,7 +711,7 @@ async function generateClipCandidates() {
     }
     renderClipCandidates(response.clips);
     await chrome.storage.local.set({
-      [videoStorageKey("contentValueRadarV3")]: response.clips
+      [videoStorageKey("contentValueRadarV4")]: response.clips
     });
     elements.generateClipsButton.textContent = "重新分析内容价值";
   } catch (error) {
@@ -696,7 +722,23 @@ async function generateClipCandidates() {
   }
 }
 
+function isRenderableClipRadar(result) {
+  return (
+    result &&
+    typeof result === "object" &&
+    String(result.intro || "").trim().length >= 12 &&
+    Array.isArray(result.clips) &&
+    result.clips.filter((clip) =>
+      Number(clip?.to) > Number(clip?.from) + 3 &&
+      String(clip?.title || "").trim()
+    ).length >= 5
+  );
+}
+
 function renderClipCandidates(result) {
+  if (!isRenderableClipRadar(result)) {
+    throw new Error("高光分析结果不完整，未保存空结果。请重新分析。");
+  }
   currentClipRadar = result;
   elements.clipsIntro.textContent = result?.intro || "";
   activeClipFilter = "全部";
