@@ -14,7 +14,7 @@ Bilibili 页面
             └─ 智谱 GLM API
 ```
 
-模型、备用模型、限额和密钥都通过 Vercel 环境变量配置。切换智谱兼容模型时无需重新发布扩展。
+模型、备用模型、限额和密钥都通过服务端环境变量配置。代理支持智谱和 DeepSeek；切换模型时无需重新发布扩展。
 
 ## 2. Vercel Functions
 
@@ -33,12 +33,14 @@ Bilibili 页面
 2. 导入 GitHub 仓库 `zhoujie97/broadcast-agent-extension`。
 3. Framework Preset 选择 **Other**，Root Directory 保持仓库根目录。
 4. 在 Environment Variables 中录入：
-   - `ZHIPU_API_KEY`：智谱正式密钥。
+   - `DEEPSEEK_API_KEY`：DeepSeek 正式密钥（使用 DeepSeek 对话模型时必填）。
+   - `ZHIPU_API_KEY`：智谱正式密钥（使用智谱对话模型或保留智谱联网搜索时必填）。
    - `SESSION_SIGNING_SECRET`：至少 24 字符的随机字符串。
    - `ALLOWED_EXTENSION_ORIGINS`：例如 `chrome-extension://babomghgdgifmepkmndbepfidadbhffo`。多个 Origin 用英文逗号分隔。
-   - `AI_PROVIDER`：`zhipu`
-   - `AI_MODEL`：`glm-4.7-flash`
+   - `AI_PROVIDER`：推荐 `deepseek`
+   - `AI_MODEL`：推荐 `deepseek-v4-flash`
    - `AI_FALLBACK_MODEL`：可留空。
+   - `WEB_SEARCH_PROVIDER`：当前填写 `zhipu`；DeepSeek 官方对话 API 不提供本项目所需的独立网页搜索接口。
 5. 点击 Deploy。部署成功后访问 `https://你的项目.vercel.app/health`，应返回 `{"ok":true,...}`。
 
 不要把任何 API Key 提交到 Git、扩展代码、聊天、截图或日志中。
@@ -104,19 +106,20 @@ dist/broadcast-agent-extension.zip
 
 ## 7. 模型切换与回滚
 
-在 Vercel 修改：
+在服务端修改：
 
 ```text
+AI_PROVIDER=deepseek
 AI_MODEL=新模型名
 AI_FALLBACK_MODEL=备用模型名
 ```
 
-然后重新部署。先用内容地图、结构化输出和普通问答分别验证；失败时恢复旧模型并重新部署即可。更换 API 供应商时，应在代理中新增适配器，并保持扩展端 `/v1/chat/completions` 与 `/v1/web-search` 契约不变。
+然后重新部署。DeepSeek 推荐使用 `deepseek-v4-flash`，高质量备用模型可使用 `deepseek-v4-pro`。先用内容地图、结构化输出和普通问答分别验证；失败时恢复旧模型并重新部署即可。扩展端 `/v1/chat/completions` 与 `/v1/web-search` 契约保持不变。
 
 ## 8. 日常运维
 
 - 监控函数请求量、429、上游错误率、延迟和智谱费用。
 - 异常时先在智谱侧停用或限制密钥，再排查来源。
-- 定期轮换 `ZHIPU_API_KEY`。
+- 定期轮换 `DEEPSEEK_API_KEY` 和仍在使用的 `ZHIPU_API_KEY`。
 - 轮换 `SESSION_SIGNING_SECRET` 会使已有匿名会话失效并自动重新注册。
 - 扩展升级时递增版本号并重新生成 ZIP。

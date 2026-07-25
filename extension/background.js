@@ -1,7 +1,7 @@
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
   // Production builds should replace this with the deployed HTTPS proxy URL.
-  // The proxy keeps ZHIPU_API_KEY on the server; never put that key here.
+  // The proxy keeps provider API keys on the server; never put a key here.
   proxyUrl: "http://127.0.0.1:8787/v1/chat/completions",
   defaultMaxTokens: 4096
 });
@@ -204,7 +204,7 @@ async function getAiServiceStatus() {
       ok: true,
       available: false,
       model: "云端模型",
-      message: `无法连接 GLM API 代理：${error.message || "Failed to fetch"}`
+      message: `无法连接 AI API 代理：${error.message || "Failed to fetch"}`
     };
   } finally {
     clearTimeout(timeout);
@@ -2017,7 +2017,7 @@ async function requestAiProxyCompletion({
     throw createError(
       "AI_PROXY_API_ERROR",
       result.payload?.error?.message ||
-        `GLM API 代理请求失败（HTTP ${result.response.status}）。`,
+        `AI API 代理请求失败（HTTP ${result.response.status}）。`,
       {
         status: result.response.status,
         type: result.payload?.error?.type,
@@ -2057,7 +2057,7 @@ async function sendAiProxyRequest({
   } catch (error) {
     throw createError(
       "AI_PROXY_NETWORK_ERROR",
-      `无法连接 GLM API 代理（${AI_CONFIG.proxyUrl}）：${error.message || "Failed to fetch"}`
+      `无法连接 AI API 代理（${AI_CONFIG.proxyUrl}）：${error.message || "Failed to fetch"}`
     );
   }
 
@@ -2067,7 +2067,7 @@ async function sendAiProxyRequest({
   } catch {
     throw createError(
       "AI_PROXY_INVALID_RESPONSE",
-      `GLM API 代理返回了无法解析的响应（HTTP ${response.status}）。`
+      `AI API 代理返回了无法解析的响应（HTTP ${response.status}）。`
     );
   }
 

@@ -10,7 +10,7 @@
 - 播放器消息接收端缺失时自动重新注入页面脚本并重试
 - 搜索、复制完整智能稿本
 - 智能稿本滚动超过一定距离后显示“返回顶部”按钮
-- 通过安全代理调用智谱 `glm-4.7-flash`
+- 通过安全代理调用 DeepSeek `deepseek-v4-flash` 或智谱模型
 - 在智能稿本中选中文字即可查看结合前后文的一段式 AI 解释
 - “内容地图”把采访划分为可跳转主题章节，完整展示采访视频封面，并分别展示采访者、被采访者的联网核实资料
 - 内容地图和高光切片会校验 AI 返回结构；字段缺失时自动修复，仍不完整则拒绝缓存并显示错误，避免出现“生成成功但内容为空”
@@ -33,7 +33,7 @@
 
 ## 为什么必须使用代理
 
-浏览器扩展的源代码和网络请求对用户可见，任何写入扩展的 API Key 都可以被复制。为了让用户免输入 Key，扩展只请求你部署的代理；智谱 Key 只存在于代理服务的环境变量中。
+浏览器扩展的源代码和网络请求对用户可见，任何写入扩展的 API Key 都可以被复制。为了让用户免输入 Key，扩展只请求你部署的代理；模型供应商 Key 只存在于代理服务的环境变量中。
 
 源码开发版默认代理地址为：
 
@@ -48,10 +48,14 @@ http://127.0.0.1:8787/v1/chat/completions
 要求 Node.js 18 或更高版本。
 
 ```bash
-ZHIPU_API_KEY="你的智谱API Key" npm run proxy
+AI_PROVIDER=deepseek \
+AI_MODEL=deepseek-v4-flash \
+DEEPSEEK_API_KEY="你的 DeepSeek API Key" \
+ZHIPU_API_KEY="可选的智谱搜索 API Key" \
+npm run proxy
 ```
 
-密钥只通过环境变量传入，不要写入代码或提交到 Git。默认模型由 `AI_MODEL` 配置，当前为 `glm-4.7-flash`；可通过 `AI_FALLBACK_MODEL` 配置备用模型。
+密钥只通过环境变量传入，不要写入代码或提交到 Git。`AI_PROVIDER` 支持 `deepseek` 和 `zhipu`；DeepSeek 默认推荐 `deepseek-v4-flash`，可通过 `AI_FALLBACK_MODEL` 配置同供应商备用模型。
 
 代理健康检查：
 
@@ -61,7 +65,7 @@ http://127.0.0.1:8787/health
 
 ## 侧载到 Edge
 
-1. 启动 GLM 代理。
+1. 启动 AI 代理。
 2. 打开 `edge://extensions`。
 3. 开启“开发人员模式”。
 4. 点击“加载解压缩的扩展”，选择本目录 `extension/`。
@@ -85,7 +89,7 @@ http://127.0.0.1:8787/health
 ## 生产部署要求
 
 - 使用 HTTPS 代理地址。
-- 把 `ZHIPU_API_KEY` 设置为服务端 Secret。
+- 把当前对话供应商的 API Key 设置为服务端 Secret；DeepSeek 使用 `DEEPSEEK_API_KEY`。
 - 将 `ALLOWED_EXTENSION_ORIGINS` 限制为正式扩展的固定 Origin。
 - Vercel 部署入口位于根目录 `api/`，`vercel.json` 保持现有 `/v1/...` 接口不变。
 - 代理包含进程内注册频率、每分钟、单安装日用量和全局日用量保护；Vercel 会扩容和重启，因此正式上线还必须在智谱侧设置预算/消费上限。
@@ -105,15 +109,15 @@ http://127.0.0.1:8787/health
 
 ## 常见失败
 
-### 无法连接 GLM API 代理
+### 无法连接 AI API 代理
 
 - 本地验证时确认 `npm run proxy` 正在运行。
 - 确认代理健康检查能返回 `{ "ok": true }`。
 - 生产环境确认 `AI_PROXY_URL` 和 `host_permissions` 使用同一 HTTPS 域名。
 
-### 智谱返回 401 或 403
+### 模型供应商返回 401 或 403
 
-检查代理环境变量中的 `ZHIPU_API_KEY` 是否有效。不要把 Key 发到聊天、截图、日志或扩展代码中。
+检查与 `AI_PROVIDER` 对应的 API Key 是否有效。不要把 Key 发到聊天、截图、日志或扩展代码中。
 
 ### 字幕无法读取
 

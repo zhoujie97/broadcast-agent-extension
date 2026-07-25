@@ -6,9 +6,18 @@ const PORT = Number(process.env.PORT) || 8787;
 const IS_VERCEL = process.env.VERCEL === "1";
 const IS_LOCAL = !IS_VERCEL && HOST === "127.0.0.1";
 const ZHIPU_API_KEY = String(process.env.ZHIPU_API_KEY || "").trim();
-const AI_PROVIDER = String(process.env.AI_PROVIDER || "zhipu").trim();
-const MODEL = String(process.env.AI_MODEL || "glm-4.7-flash").trim();
+const DEEPSEEK_API_KEY = String(process.env.DEEPSEEK_API_KEY || "").trim();
+const AI_PROVIDER = String(process.env.AI_PROVIDER || "zhipu")
+  .trim()
+  .toLowerCase();
+const MODEL = String(
+  process.env.AI_MODEL ||
+  (AI_PROVIDER === "deepseek" ? "deepseek-v4-flash" : "glm-4.7-flash")
+).trim();
 const FALLBACK_MODEL = String(process.env.AI_FALLBACK_MODEL || "").trim();
+const WEB_SEARCH_PROVIDER = String(
+  process.env.WEB_SEARCH_PROVIDER || "zhipu"
+).trim().toLowerCase();
 const SESSION_SIGNING_SECRET = String(
   process.env.SESSION_SIGNING_SECRET || (
     IS_LOCAL ? "local-development-only-secret" : ""
@@ -18,6 +27,7 @@ const ZHIPU_CHAT_URL =
   "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const ZHIPU_WEB_SEARCH_URL =
   "https://open.bigmodel.cn/api/paas/v4/web_search";
+const DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions";
 const MAX_BODY_BYTES = clamp(
   Number(process.env.MAX_BODY_BYTES),
   64 * 1024,
@@ -94,7 +104,9 @@ export async function handleProxyRequest(request, response) {
       ok: true,
       provider: AI_PROVIDER,
       model: MODEL,
-      fallbackConfigured: Boolean(FALLBACK_MODEL)
+      fallbackConfigured: Boolean(FALLBACK_MODEL),
+      webSearchProvider: WEB_SEARCH_PROVIDER,
+      webSearchConfigured: isWebSearchConfigured()
     });
   }
 
@@ -150,20 +162,9 @@ export async function handleProxyRequest(request, response) {
       if (!searchQuery) {
         throw httpError(400, "INVALID_QUERY", "query is required");
       }
-      const upstream = await fetchWithTimeout(ZHIPU_WEB_SEARCH_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${ZHIPU_API_KEY}`
-        },
-        body: JSON.stringify({
-          search_query: searchQuery,
-          search_engine: "search_std",
-          search_intent: false,
-          count: clamp(Number(input.count), 1, 20, 10),
-          search_recency_filter: "noLimit",
-          content_size: "high"
-        })
+      const upstream = await requestWebSearch({
+        query: searchQuery,
+        count: clamp(Number(input.count), 1, 20, 10)
       });
       return relayUpstream(response, upstream);
     }
@@ -198,15 +199,18 @@ export async function handleProxyRequest(request, response) {
 }
 
 function assertProductionConfiguration() {
-  if (!ZHIPU_API_KEY) {
-    throw httpError(503, "PROXY_NOT_CONFIGURED", "缺少 ZHIPU_API_KEY。");
-  }
-  if (AI_PROVIDER !== "zhipu") {
+  if (!["zhipu", "deepseek"].includes(AI_PROVIDER)) {
     throw httpError(
       503,
       "PROVIDER_NOT_SUPPORTED",
       `当前版本暂不支持 AI_PROVIDER=${AI_PROVIDER}`
     );
+  }
+  if (!chatApiKey()) {
+    const variable = AI_PROVIDER === "deepseek"
+      ? "DEEPSEEK_API_KEY"
+      : "ZHIPU_API_KEY";
+    throw httpError(503, "PROXY_NOT_CONFIGURED", `缺少 ${variable}。`);
   }
   if (!SESSION_SIGNING_SECRET || SESSION_SIGNING_SECRET.length < 24) {
     throw httpError(
@@ -231,13 +235,17 @@ async function requestChatCompletion({
   maxTokens,
   responseFormat
 }) {
+  const apiKey = chatApiKey();
+  const chatUrl = AI_PROVIDER === "deepseek"
+    ? DEEPSEEK_CHAT_URL
+    : ZHIPU_CHAT_URL;
   const requestModel = async (selectedModel) => fetchWithTimeout(
-    ZHIPU_CHAT_URL,
+    chatUrl,
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${ZHIPU_API_KEY}`
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
         model: selectedModel,
@@ -256,6 +264,46 @@ async function requestChatCompletion({
   const primary = await requestModel(model);
   if (primary.ok || !FALLBACK_MODEL || primary.status < 500) return primary;
   return requestModel(FALLBACK_MODEL);
+}
+
+function chatApiKey() {
+  return AI_PROVIDER === "deepseek" ? DEEPSEEK_API_KEY : ZHIPU_API_KEY;
+}
+
+function isWebSearchConfigured() {
+  return WEB_SEARCH_PROVIDER === "zhipu" && Boolean(ZHIPU_API_KEY);
+}
+
+async function requestWebSearch({ query, count }) {
+  if (WEB_SEARCH_PROVIDER !== "zhipu") {
+    throw httpError(
+      503,
+      "WEB_SEARCH_PROVIDER_NOT_SUPPORTED",
+      `当前版本暂不支持 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER}`
+    );
+  }
+  if (!ZHIPU_API_KEY) {
+    throw httpError(
+      503,
+      "WEB_SEARCH_NOT_CONFIGURED",
+      "联网搜索未配置；请设置 ZHIPU_API_KEY，或暂时关闭依赖联网搜索的功能。"
+    );
+  }
+  return fetchWithTimeout(ZHIPU_WEB_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ZHIPU_API_KEY}`
+    },
+    body: JSON.stringify({
+      search_query: query,
+      search_engine: "search_std",
+      search_intent: false,
+      count,
+      search_recency_filter: "noLimit",
+      content_size: "high"
+    })
+  });
 }
 
 async function fetchWithTimeout(url, options) {

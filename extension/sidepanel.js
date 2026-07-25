@@ -328,13 +328,13 @@ async function loadAiStatus() {
     aiModelName = response?.model || "云端模型";
     if (!aiAvailable) {
       setAiStatus(
-        response?.message || "GLM API 代理未连接，请先启动或部署代理。",
+        response?.message || "AI API 代理未连接，请先启动或部署代理。",
         true
       );
     }
   } catch (error) {
     aiAvailable = false;
-    setAiStatus(`无法检测 GLM API 代理：${error.message}`, true);
+    setAiStatus(`无法检测 AI API 代理：${error.message}`, true);
   }
   updateAiConfigState();
 }
@@ -405,7 +405,7 @@ async function loadTranscript() {
   setAiStatus(
     aiAvailable
       ? `${aiModelName} 已就绪，无需下载模型或配置 API Key。`
-      : "GLM API 代理未连接，请先启动或部署代理。",
+      : "AI API 代理未连接，请先启动或部署代理。",
     !aiAvailable
   );
 }

@@ -37,7 +37,7 @@ for (const file of files) {
   if (/http:\/\/127\.0\.0\.1:8787/u.test(text)) {
     throw new Error(`生产包仍包含本地代理地址：${path.relative(extensionDir, file)}`);
   }
-  if (/(?:sk-[a-zA-Z0-9_-]{20,}|ZHIPU_API_KEY\s*[:=]\s*["'][^"']+)/u.test(text)) {
+  if (/(?:sk-[a-zA-Z0-9_-]{20,}|(?:ZHIPU|DEEPSEEK)_API_KEY\s*[:=]\s*["'][^"']+)/u.test(text)) {
     throw new Error(`生产包疑似包含密钥：${path.relative(extensionDir, file)}`);
   }
 }
