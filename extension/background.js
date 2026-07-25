@@ -48,7 +48,9 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("contentMapV2:") ||
       key.startsWith("contentMapV3:") ||
       key.startsWith("contentMapV4:") ||
+      key.startsWith("contentMapV5:") ||
       key.startsWith("remix:") ||
+      key.startsWith("remixV2:") ||
       key.startsWith("followupV2:")
     );
   const sessionKeys = Object.keys(sessionValues)
@@ -403,7 +405,7 @@ async function generateOverview(payload = {}) {
       ]
     },
     instructions:
-      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 是被采访者的人生时间线，不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者在信息充分时给出4至8个事件，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词；period 绝不能返回单独的‘年’‘月’‘日’‘时期’或‘阶段’，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
+      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 只能包含 interviewees 中的被采访者，绝对不能为主持人、采访者或其他被提及人物生成轨迹；即使访谈谈到采访者的人生，也必须忽略。人生轨迹不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者最多生成一条轨迹，在信息充分时给出4至8个事件，personName 必须逐字复制 interviewees 中对应姓名，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词；period 绝不能返回单独的‘年’‘月’‘日’‘时期’或‘阶段’，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
     input: JSON.stringify({
       videoTitle,
       publisher: payload.video?.publisher || "",
@@ -1076,15 +1078,16 @@ function normalizeContentMapResult(overview, transcript) {
     ? overview.interviewees
     : []).map((person) => String(person?.name || "").replace(/\s+/gu, "").trim())
     .filter(Boolean);
-  overview.lifeTrajectories = (Array.isArray(overview.lifeTrajectories)
+  const normalizedTrajectories = (Array.isArray(overview.lifeTrajectories)
     ? overview.lifeTrajectories
     : []).map((trajectory) => {
     const rawName = String(trajectory?.personName || "").replace(/\s+/gu, "").trim();
     const matchedName = intervieweeNames.find((name) =>
       name === rawName || name.includes(rawName) || rawName.includes(name));
+    if (!matchedName) return null;
     return {
       ...trajectory,
-      personName: matchedName || (intervieweeNames.length === 1 ? intervieweeNames[0] : rawName),
+      personName: matchedName,
       events: (Array.isArray(trajectory?.events) ? trajectory.events : [])
         .filter((event) => event?.title && event?.description)
         .map((event) => ({
@@ -1094,10 +1097,15 @@ function normalizeContentMapResult(overview, transcript) {
         }))
         .slice(0, 8)
     };
-  }).filter((trajectory) =>
-    trajectory.personName &&
-    (!intervieweeNames.length || intervieweeNames.includes(trajectory.personName))
-  );
+  }).filter(Boolean);
+  const trajectoryByPerson = new Map();
+  for (const trajectory of normalizedTrajectories) {
+    const existing = trajectoryByPerson.get(trajectory.personName);
+    if (!existing || trajectory.events.length > existing.events.length) {
+      trajectoryByPerson.set(trajectory.personName, trajectory);
+    }
+  }
+  overview.lifeTrajectories = [...trajectoryByPerson.values()];
 }
 
 function nearestTranscriptTime(value, existingTimes) {
@@ -1741,11 +1749,12 @@ async function generateRemix(payload = {}) {
   const style = String(payload.style || "profile");
   const length = String(payload.length || "medium");
   const styleInstructions = {
-    profile: "人物特写：以人物选择、转折、性格和方法为叙事主线，兼具现场感与分析。",
-    magazine: "杂志报道：采用专业媒体报道结构，有导语、场景、观点推进和克制结尾。",
-    biography: "人物传记片段：按关键经历和观念变化组织，但不得编造逐字稿未提供的生平。",
-    first_person: "第一人称自述：以被采访者口吻重组内容；只能改写其明确表达，不得虚构内心或经历。",
-    insight_essay: "观点深度文章：围绕采访中最重要的命题建立论点、论据和反思，人物作为观点来源。"
+    profile:
+      "人物特写。必须使用第三人称，以记者或非虚构作者的观察视角写人物，不能把全文写成嘉宾自述。开头从访谈中真实存在的一个动作、语气、选择或矛盾切入；正文围绕人物的关键选择、性格张力、职业转折与行动方式推进，把经历写成能解释人物的叙事，而不是按年份罗列简历。每一节都要同时包含具体经历与编辑分析，并清楚区分人物原话、事实转述和作者观察；结尾回到人物仍未解决的命题或持续坚持的价值。",
+    first_person:
+      "嘉宾第一人称自述。全文只能采用被采访者的‘我’来讲述，删除主持人声音和第三人称记者评论，也不要出现‘他/她认为’式旁观叙述。按嘉宾在访谈中亲自讲述的记忆、选择、犹豫、代价和领悟重组为一篇有时间流动的自述；保留口语的个性与情绪，但压缩重复和语气词。只能把嘉宾明确表达过的内容改写成第一人称，绝不能替嘉宾补写未说过的心理、动机、场景或结论。结尾应像嘉宾对当下处境的自我回答，而不是媒体评价。",
+    insight_essay:
+      "深度文章。必须以本期访谈揭示的核心问题或认知冲突为中心，而不是按人物生平顺序写传记，也不能冒充嘉宾第一人称。开头提出一个具体问题；正文建立清晰论点，用访谈中的经历、观点与细节作为论据，至少呈现一处矛盾、限制条件或反面可能，再把个体经验推向更普遍的职业、关系、创作或社会观察；人物是论证材料而不是文章唯一主角。结尾给出有边界的判断或值得继续追问的问题，避免鸡汤式升华。"
   };
   const lengthTargets = {
     short: "约800至1200字",
@@ -1782,7 +1791,7 @@ async function generateRemix(payload = {}) {
       required: ["title", "deck", "sections", "disclaimer"]
     },
     instructions:
-      `你是中文非虚构写作编辑。写作形式：${styleInstructions[style] || styleInstructions.profile}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。文章要像完整作品而不是摘要，保留人物观点的细节、冲突与转折。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自逐字稿。sections 应有3至7节，每节 heading 是简洁、有叙事意味的小标题，paragraphs 是2至5个完整自然段；不要在段落中使用 Markdown 标题、项目符号或编号。各节之间要形成清晰推进，而不是把摘要机械拆开。disclaimer 简短说明改写边界。`,
+      `你是中文非虚构写作编辑。写作形式：${styleInstructions[style] || styleInstructions.profile}目标篇幅：${lengthTargets[length] || lengthTargets.medium}。文章要像完整作品而不是摘要，保留人物观点的细节、冲突与转折。可以压缩、重排和转述，但不得编造事实、场景、引语或心理活动；直接引语只能来自逐字稿。sections 应有3至7节，每节 heading 使用12至28个汉字，写成信息充分、具有叙事张力的小标题，不能只写‘成长’‘转折’‘选择’等空泛短词；paragraphs 是2至5个完整自然段。不要在段落中使用 Markdown 标题、项目符号或编号。各节之间要形成清晰推进，而不是把摘要机械拆开。disclaimer 简短说明改写边界。`,
     input: JSON.stringify({
       videoTitle: payload.video?.title || "",
       transcript

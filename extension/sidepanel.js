@@ -473,10 +473,10 @@ function transcriptForAi() {
 }
 
 async function loadWorkspaceData() {
-  const overviewKey = videoStorageKey("contentMapV5");
+  const overviewKey = videoStorageKey("contentMapV6");
   const notesKey = videoStorageKey("timelineNotes");
   const remixKey = videoStorageKey(
-    "remixV2",
+    "remixV3",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const followupKey = videoStorageKey("followupV3");
@@ -527,7 +527,7 @@ async function generateOverview() {
     }
     renderOverview(response.overview);
     await chrome.storage.local.set({
-      [videoStorageKey("contentMapV5")]: response.overview
+      [videoStorageKey("contentMapV6")]: response.overview
     });
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
@@ -611,9 +611,29 @@ function summarizeChapterFallback(content) {
 
 function renderLifePaths(trajectories) {
   elements.overviewLifePaths.replaceChildren();
-  const validTrajectories = Array.isArray(trajectories)
-    ? trajectories.filter((trajectory) => Array.isArray(trajectory?.events) && trajectory.events.length)
-    : [];
+  const intervieweeNames = new Set(
+    (Array.isArray(currentOverview?.interviewees)
+      ? currentOverview.interviewees
+      : [])
+      .map((person) => String(person?.name || "").replace(/\s+/gu, "").trim())
+      .filter(Boolean)
+  );
+  const seenNames = new Set();
+  const validTrajectories = (Array.isArray(trajectories) ? trajectories : [])
+    .filter((trajectory) => {
+      const name = String(trajectory?.personName || "")
+        .replace(/\s+/gu, "")
+        .trim();
+      if (
+        !name ||
+        !intervieweeNames.has(name) ||
+        seenNames.has(name) ||
+        !Array.isArray(trajectory?.events) ||
+        !trajectory.events.length
+      ) return false;
+      seenNames.add(name);
+      return true;
+    });
   if (!validTrajectories.length) {
     const empty = document.createElement("p");
     empty.className = "life-path-empty";
@@ -1298,7 +1318,7 @@ async function generateRemix() {
     }
     renderRemix(response.remix);
     await chrome.storage.local.set({
-      [videoStorageKey("remixV2", `${style}:${length}`)]: response.remix
+      [videoStorageKey("remixV3", `${style}:${length}`)]: response.remix
     });
   } catch (error) {
     elements.remixError.textContent = error.message;
@@ -1311,7 +1331,7 @@ async function generateRemix() {
 async function loadSelectedRemix() {
   if (!currentVideo) return;
   const key = videoStorageKey(
-    "remixV2",
+    "remixV3",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const stored = await chrome.storage.local.get(key);

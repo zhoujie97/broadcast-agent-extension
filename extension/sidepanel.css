@@ -2370,3 +2370,14 @@ h1 {
     letter-spacing: 0.09em;
   }
 }
+
+/* Keep the transcript return action visible at the bottom of the current viewport. */
+.back-to-top-button {
+  position: fixed;
+  z-index: 12;
+  right: 18px;
+  bottom: 18px;
+  width: auto;
+  margin: 0;
+  box-shadow: 0 5px 15px rgb(31 47 99 / 18%);
+}
