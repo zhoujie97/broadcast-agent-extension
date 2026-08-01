@@ -822,33 +822,16 @@ function ensureNoteOverlay() {
     }
     message.textContent = `已保存 ${formatTime(seconds)}`;
     textarea.value = "";
-    window.setTimeout(() => {
-      editor.hidden = true;
-      message.textContent = "";
-    }, 800);
   });
   overlay.querySelector('[data-action="close-answer"]').addEventListener("click", () => {
     answerCard.hidden = true;
   });
-  let hideOverlayTimer = null;
   let fadeOverlayTimer = null;
   overlay.addEventListener("mouseenter", () => {
-    window.clearTimeout(hideOverlayTimer);
     window.clearTimeout(fadeOverlayTimer);
     overlay.classList.remove("idle");
   });
   overlay.addEventListener("mouseleave", () => {
-    window.clearTimeout(hideOverlayTimer);
-    hideOverlayTimer = window.setTimeout(() => {
-      if (overlay.matches(":hover") || submitButton.disabled) return;
-      editor.hidden = true;
-      answerCard.hidden = true;
-      const focusedElement = document.activeElement;
-      if (focusedElement && overlay.contains(focusedElement)) {
-        focusedElement.blur();
-      }
-      trigger.setAttribute("aria-expanded", "false");
-    }, 180);
     window.clearTimeout(fadeOverlayTimer);
     fadeOverlayTimer = window.setTimeout(() => {
       if (!overlay.matches(":hover")) overlay.classList.add("idle");
