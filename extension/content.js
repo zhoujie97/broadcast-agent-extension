@@ -66,25 +66,33 @@ async function toggleFloatingPanel() {
 async function createFloatingPanel() {
   const stored = await chrome.storage.local.get("floatingPanelState");
   const state = stored.floatingPanelState || {};
-  const hasSavedPosition = state.layoutVersion === 2;
+  const hasSavedPosition = state.layoutVersion === 3;
   const viewportWidth = Math.max(320, window.innerWidth);
-  const viewportHeight = Math.max(480, window.innerHeight);
+  const viewportHeight = Math.max(1, window.innerHeight);
   const maxPanelWidth = Math.max(296, viewportWidth - 24);
   const minPanelWidth = Math.min(480, maxPanelWidth);
   const width = clamp(Number(state.width) || 640, minPanelWidth, maxPanelWidth);
+  const savedTop = Number(state.top);
+  const top = hasSavedPosition && Number.isFinite(savedTop)
+    ? clamp(savedTop, 0, Math.max(0, viewportHeight - 120))
+    : 0;
+  const availableHeight = Math.max(1, viewportHeight - top);
+  const minPanelHeight = Math.min(420, availableHeight);
   const height = clamp(
-    Number(state.height) || Math.round(viewportHeight * 0.86),
-    420,
-    Math.max(420, viewportHeight - 24)
+    hasSavedPosition && Number(state.height) > 0
+      ? Number(state.height)
+      : availableHeight,
+    minPanelHeight,
+    availableHeight
   );
   const host = document.createElement("div");
   host.id = "podcast-reader-floating-panel";
   host.style.cssText = [
     "position:fixed",
-    `top:${hasSavedPosition ? clamp(Number(state.top) || 12, 12, Math.max(12, viewportHeight - 120)) : 12}px`,
+    `top:${top}px`,
     hasSavedPosition && Number.isFinite(Number(state.left))
-      ? `left:${clamp(Number(state.left), 12, Math.max(12, viewportWidth - width - 12))}px`
-      : "right:12px",
+      ? `left:${clamp(Number(state.left), 0, Math.max(0, viewportWidth - width))}px`
+      : "right:0",
     `width:${width}px`,
     `height:${height}px`,
     "z-index:2147483647",
@@ -395,7 +403,7 @@ async function persistFloatingPanelState(patch) {
   await chrome.storage.local.set({
     floatingPanelState: {
       ...(stored.floatingPanelState || {}),
-      layoutVersion: 2,
+      layoutVersion: 3,
       ...patch
     }
   });

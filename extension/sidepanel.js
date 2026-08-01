@@ -1732,7 +1732,7 @@ function updateRemixGuestOptions(overview = currentOverview) {
   if (!names.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "待内容地图识别嘉宾";
+    option.textContent = "生成时自动识别嘉宾";
     elements.remixGuest.append(option);
   } else {
     for (const name of names) {
