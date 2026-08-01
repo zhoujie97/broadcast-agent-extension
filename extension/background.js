@@ -1553,15 +1553,24 @@ async function generateFollowup(payload = {}) {
     .slice(0, 3);
   const topics = collectFollowupTopics(overview);
   const title = String(payload.video?.title || "").slice(0, 48);
-  const subjects = names.length
-    ? names
-    : [cleanFollowupSearchTerm(title) || "本期嘉宾"];
+  if (!names.length) {
+    throw createError(
+      "FOLLOWUP_INTERVIEWEES_REQUIRED",
+      "请先生成内容地图并识别被采访者，再生成延伸探索。"
+    );
+  }
+  const subjects = names;
   const candidateGroups = await Promise.all(subjects.map((guestName) =>
     collectFollowupCandidatesForGuest({
       guestName,
       topics,
       title,
-      video: payload.video
+      video: payload.video,
+      profile: (Array.isArray(overview.interviewees)
+        ? overview.interviewees
+        : []).find((person) =>
+          cleanFollowupSearchTerm(person?.name) === guestName
+        )
     })
   ));
   const missingGuests = subjects.filter((_name, index) => !candidateGroups[index].length);
@@ -1571,18 +1580,23 @@ async function generateFollowup(payload = {}) {
       `暂未检索到${missingGuests.join("、")}的可靠延伸资料，请稍后重试。`
     );
   }
-  const incompleteGuests = subjects.filter((_name, index) => {
+  const categoryGaps = subjects.map((name, index) => {
     const group = candidateGroups[index];
     const hasVideo = group.some((item) =>
       item.inferredType === "podcast" || item.inferredType === "video"
     );
     const hasArticle = group.some((item) => item.inferredType === "article");
-    return !hasVideo || !hasArticle;
-  });
-  if (incompleteGuests.length) {
+    return {
+      name,
+      missing: [!hasVideo ? "视频" : "", !hasArticle ? "文章" : ""].filter(Boolean)
+    };
+  }).filter((item) => item.missing.length);
+  if (categoryGaps.length) {
     throw createError(
       "FOLLOWUP_GUEST_CATEGORY_MISSING",
-      `暂未同时找到${incompleteGuests.join("、")}的视频和文章资料，请稍后重试。`
+      `延伸资料仍不完整：${categoryGaps.map((item) =>
+        `${item.name}缺少${item.missing.join("和")}`
+      ).join("；")}。请稍后重试。`
     );
   }
   const candidates = candidateGroups.flat();
@@ -1687,7 +1701,13 @@ async function generateFollowup(payload = {}) {
   return { ok: true, followup: result };
 }
 
-async function collectFollowupCandidatesForGuest({ guestName, topics, title, video }) {
+async function collectFollowupCandidatesForGuest({
+  guestName,
+  topics,
+  title,
+  video,
+  profile = {}
+}) {
   const biliQueries = deduplicateStrings([
     `${guestName} 访谈`,
     `${guestName} 对话 播客`
@@ -1714,12 +1734,22 @@ async function collectFollowupCandidatesForGuest({ guestName, topics, title, vid
       }
     })
     .map((item) => ({ ...item, media: "百度百科" }));
+  const profileSources = (Array.isArray(profile?.sourceLinks)
+    ? profile.sourceLinks
+    : []).map((source) => ({
+      title: String(source?.title || `${guestName}人物资料`),
+      url: String(source?.url || ""),
+      content: `${guestName} ${profile?.bio || ""} ${profile?.knownFor || ""}`.trim(),
+      media: "人物资料",
+      publishDate: ""
+    }));
   const candidates = [];
   const seen = new Set();
   for (const item of [
     ...videoBatches.flat(),
     ...webBatches.flat().filter(isUsableResearchEvidence),
-    ...knowledge
+    ...knowledge,
+    ...profileSources
   ]) {
     const relevanceScore = followupRelevanceScore(item, [guestName], topics, title);
     if (

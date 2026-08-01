@@ -372,7 +372,19 @@ function updateAiConfigState() {
   elements.generateClipsButton.disabled = transcriptUnavailable;
   elements.generateRemixButton.disabled = transcriptUnavailable;
   elements.askButton.disabled = transcriptUnavailable;
-  elements.generateFollowupButton.disabled = transcriptUnavailable;
+  const followupUnavailable = !hasIdentifiedInterviewees();
+  elements.generateFollowupButton.disabled = transcriptUnavailable || followupUnavailable;
+  if (followupUnavailable) {
+    elements.generateFollowupButton.textContent = "请先生成内容地图";
+  } else if (elements.generateFollowupButton.textContent === "请先生成内容地图") {
+    elements.generateFollowupButton.textContent = "生成延伸探索";
+  }
+}
+
+function hasIdentifiedInterviewees() {
+  return (Array.isArray(currentOverview?.interviewees)
+    ? currentOverview.interviewees
+    : []).some((person) => String(person?.name || "").trim().length >= 2);
 }
 
 async function loadTranscript() {
@@ -814,6 +826,7 @@ function renderOverview(overview) {
   renderThoughtFragments(overview.thoughtFragments || overview.takeaways);
   elements.overviewError.hidden = true;
   elements.overviewOutput.hidden = false;
+  updateAiConfigState();
 }
 
 function summarizeChapterFallback(content) {
@@ -1396,7 +1409,8 @@ function setModuleBusy(module, busy) {
     if (busy) elements.questionError.hidden = true;
   }
   if (module === "followup") {
-    elements.generateFollowupButton.disabled = busy || unavailable;
+    elements.generateFollowupButton.disabled =
+      busy || unavailable || !hasIdentifiedInterviewees();
     elements.followupLoading.hidden = !busy;
     if (busy) elements.followupError.hidden = true;
   }
@@ -1404,6 +1418,12 @@ function setModuleBusy(module, busy) {
 
 async function generateFollowup() {
   if (!currentVideo) return;
+  if (!hasIdentifiedInterviewees()) {
+    elements.followupError.textContent =
+      "请先生成内容地图并识别被采访者，再生成延伸探索。";
+    elements.followupError.hidden = false;
+    return;
+  }
   if (!(await ensureAiConsent())) return;
   setModuleBusy("followup", true);
   try {
