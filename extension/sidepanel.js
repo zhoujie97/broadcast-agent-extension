@@ -59,6 +59,8 @@ const elements = {
   clipsError: document.querySelector("#clips-error"),
   clipFilterButtons: [...document.querySelectorAll(".clip-filter")],
   remixStyle: document.querySelector("#remix-style"),
+  remixGuestField: document.querySelector("#remix-guest-field"),
+  remixGuest: document.querySelector("#remix-guest"),
   remixLength: document.querySelector("#remix-length"),
   generateRemixButton: document.querySelector("#generate-remix-button"),
   remixLoading: document.querySelector("#remix-loading"),
@@ -148,7 +150,8 @@ for (const button of elements.clipFilterButtons) {
 elements.generateRemixButton.addEventListener("click", generateRemix);
 elements.generateFollowupButton.addEventListener("click", generateFollowup);
 elements.copyRemixButton.addEventListener("click", copyRemix);
-elements.remixStyle.addEventListener("change", loadSelectedRemix);
+elements.remixStyle.addEventListener("change", handleRemixControlChange);
+elements.remixGuest.addEventListener("change", loadSelectedRemix);
 elements.remixLength.addEventListener("change", loadSelectedRemix);
 elements.questionForm.addEventListener("submit", askPodcast);
 elements.noteForm.addEventListener("submit", saveManualNote);
@@ -169,6 +172,7 @@ elements.retryInsightButton.addEventListener("click", () => {
     );
   }
 });
+updateRemixGuestControl();
 elements.insightDialog.addEventListener("click", (event) => {
   if (event.target === elements.insightDialog) {
     elements.insightDialog.close();
@@ -631,15 +635,11 @@ function transcriptForAi() {
 async function loadWorkspaceData() {
   const overviewKey = videoStorageKey("contentMapV8");
   const notesKey = videoStorageKey("timelineNotes");
-  const remixKey = videoStorageKey(
-    "remixV4",
-    `${elements.remixStyle.value}:${elements.remixLength.value}`
-  );
-  const followupKey = videoStorageKey("followupV3");
+  const followupKey = videoStorageKey("followupV4");
   const clipsKey = videoStorageKey("contentValueRadarV8");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
-    overviewKey, notesKey, remixKey, followupKey, clipsKey, clipFavoritesKey
+    overviewKey, notesKey, followupKey, clipsKey, clipFavoritesKey
   ]);
   notes = Array.isArray(stored[notesKey]) ? stored[notesKey] : [];
   renderNotes();
@@ -649,9 +649,7 @@ async function loadWorkspaceData() {
   } else if (stored[overviewKey]) {
     await chrome.storage.local.remove(overviewKey);
   }
-  if (stored[remixKey]) {
-    renderRemix(stored[remixKey]);
-  }
+  await loadSelectedRemix();
   if (stored[followupKey]) {
     renderFollowup(stored[followupKey]);
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
@@ -685,6 +683,7 @@ async function generateOverview() {
     await chrome.storage.local.set({
       [videoStorageKey("contentMapV8")]: response.overview
     });
+    await loadSelectedRemix();
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
     elements.overviewError.textContent = error.message;
@@ -734,6 +733,7 @@ async function correctOverview(event) {
     await chrome.storage.local.set({
       [videoStorageKey("contentMapV8")]: response.overview
     });
+    await loadSelectedRemix();
     elements.overviewCorrectionInput.value = "";
     elements.overviewCorrectionStatus.textContent =
       `已核实并修正：${response.explanation || "问题成立。"}`;
@@ -783,6 +783,7 @@ function renderOverview(overview) {
   }
   renderPeopleGroup(elements.overviewInterviewers, overview.interviewers, "采访者");
   renderPeopleGroup(elements.overviewInterviewees, overview.interviewees, "被采访者");
+  updateRemixGuestOptions(overview);
   elements.overviewChapters.replaceChildren();
   for (const chapter of Array.isArray(overview.chapters) ? overview.chapters : []) {
     const card = document.createElement("article");
@@ -1412,7 +1413,7 @@ async function generateFollowup() {
     }
     renderFollowup(response.followup);
     await chrome.storage.local.set({
-      [videoStorageKey("followupV3")]: response.followup
+      [videoStorageKey("followupV4")]: response.followup
     });
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
   } catch (error) {
@@ -1433,16 +1434,32 @@ function renderFollowup(followup) {
     elements.followupTopics.append(chip);
   }
   elements.followupItems.replaceChildren();
-  const groupedResults = (Array.isArray(followup.items) ? followup.items : [])
+  const normalizedResults = (Array.isArray(followup.items) ? followup.items : [])
     .map((result) => ({
       ...result,
+      guestName: String(result.guestName || "本期主题").trim(),
       type: normalizeFollowupType(result)
-    }))
-    .sort((a, b) => followupTypeRank(a.type) - followupTypeRank(b.type));
+    }));
+  const guestOrder = [...new Set(normalizedResults.map((result) => result.guestName))];
+  const groupedResults = normalizedResults.sort((a, b) => {
+    const guestDifference = guestOrder.indexOf(a.guestName) - guestOrder.indexOf(b.guestName);
+    return guestDifference || followupTypeRank(a.type) - followupTypeRank(b.type);
+  });
+  let activeGuest = "";
   let activeGroup = "";
   for (const result of groupedResults) {
     const url = safeExternalUrl(result.url);
     if (!url || isCurrentVideoFollowup(result, url)) continue;
+    if (result.guestName !== activeGuest) {
+      activeGuest = result.guestName;
+      activeGroup = "";
+      const guestTitle = document.createElement("h3");
+      guestTitle.className = "followup-guest-title";
+      guestTitle.textContent = activeGuest === "本期主题"
+        ? activeGuest
+        : `关于 ${activeGuest}`;
+      elements.followupItems.append(guestTitle);
+    }
     if (result.type !== activeGroup) {
       activeGroup = result.type;
       const groupTitle = document.createElement("h3");
@@ -1554,7 +1571,20 @@ async function generateRemix() {
   try {
     const style = elements.remixStyle.value;
     const length = elements.remixLength.value;
-    const referenceRemixes = await loadOtherRemixSamples(style, length);
+    const selectedGuest = selectedRemixGuestName();
+    const guestNames = getIntervieweeNames(currentOverview);
+    if (
+      ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(style) &&
+      guestNames.length > 1 &&
+      !selectedGuest
+    ) {
+      throw new Error("请选择要写作的嘉宾对象。");
+    }
+    const referenceRemixes = await loadOtherRemixSamples(
+      style,
+      length,
+      selectedGuest
+    );
     const response = await chrome.runtime.sendMessage({
       type: "GENERATE_REMIX",
       payload: {
@@ -1562,6 +1592,7 @@ async function generateRemix() {
         segments: transcriptForAi(),
         style,
         length,
+        selectedGuest,
         people: {
           interviewers: (Array.isArray(currentOverview?.interviewers)
             ? currentOverview.interviewers
@@ -1578,7 +1609,10 @@ async function generateRemix() {
     }
     renderRemix(response.remix);
     await chrome.storage.local.set({
-      [videoStorageKey("remixV4", `${style}:${length}`)]: response.remix
+      [videoStorageKey(
+        "remixV5",
+        ContentUtils.remixCacheScope(style, length, selectedGuest)
+      )]: response.remix
     });
   } catch (error) {
     elements.remixError.textContent = error.message;
@@ -1590,9 +1624,14 @@ async function generateRemix() {
 
 async function loadSelectedRemix() {
   if (!currentVideo) return;
+  updateRemixGuestControl();
   const key = videoStorageKey(
-    "remixV4",
-    `${elements.remixStyle.value}:${elements.remixLength.value}`
+    "remixV5",
+    ContentUtils.remixCacheScope(
+      elements.remixStyle.value,
+      elements.remixLength.value,
+      selectedRemixGuestName()
+    )
   );
   const stored = await chrome.storage.local.get(key);
   if (stored[key]) {
@@ -1603,11 +1642,14 @@ async function loadSelectedRemix() {
   }
 }
 
-async function loadOtherRemixSamples(activeStyle, length) {
+async function loadOtherRemixSamples(activeStyle, length, selectedGuest) {
   const styles = ["profile", "first_person", "insight_essay"]
     .filter((style) => style !== activeStyle);
   const keys = styles.map((style) =>
-    videoStorageKey("remixV4", `${style}:${length}`)
+    videoStorageKey(
+      "remixV5",
+      ContentUtils.remixCacheScope(style, length, selectedGuest)
+    )
   );
   const stored = await chrome.storage.local.get(keys);
   return styles.map((style, index) => {
@@ -1625,6 +1667,53 @@ async function loadOtherRemixSamples(activeStyle, length) {
         .slice(0, 900)
     };
   }).filter(Boolean);
+}
+
+function handleRemixControlChange() {
+  updateRemixGuestControl();
+  return loadSelectedRemix();
+}
+
+function getIntervieweeNames(overview = currentOverview) {
+  return ContentUtils.normalizeGuestNames(
+    (Array.isArray(overview?.interviewees) ? overview.interviewees : [])
+      .map((person) => person?.name)
+  );
+}
+
+function updateRemixGuestOptions(overview = currentOverview) {
+  const names = getIntervieweeNames(overview);
+  const previous = elements.remixGuest.value;
+  elements.remixGuest.replaceChildren();
+  if (!names.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "待内容地图识别嘉宾";
+    elements.remixGuest.append(option);
+  } else {
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      elements.remixGuest.append(option);
+    }
+    elements.remixGuest.value = names.includes(previous) ? previous : names[0];
+  }
+  updateRemixGuestControl();
+}
+
+function updateRemixGuestControl() {
+  const personSpecific = ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(
+    elements.remixStyle.value
+  );
+  elements.remixGuestField.hidden = !personSpecific;
+  elements.remixGuest.disabled = !personSpecific || elements.remixGuest.options.length <= 1;
+}
+
+function selectedRemixGuestName() {
+  return ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(elements.remixStyle.value)
+    ? String(elements.remixGuest.value || "").trim()
+    : "";
 }
 
 function renderRemix(remix) {

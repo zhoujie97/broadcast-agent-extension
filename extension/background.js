@@ -1,4 +1,4 @@
-importScripts("person-utils.js");
+importScripts("person-utils.js", "content-utils.js");
 
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
@@ -61,7 +61,9 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("remix:") ||
       key.startsWith("remixV2:") ||
       key.startsWith("remixV3:") ||
-      key.startsWith("followupV2:")
+      key.startsWith("remixV4:") ||
+      key.startsWith("followupV2:") ||
+      key.startsWith("followupV3:")
     );
   const sessionKeys = Object.keys(sessionValues)
     .filter((key) => key.startsWith("speakerLabels:"));
@@ -1542,7 +1544,7 @@ function deduplicateSearchResults(results, limit) {
 
 async function generateFollowup(payload = {}) {
   const overview = payload.overview || {};
-  const names = (Array.isArray(overview.interviewees)
+  const names = ContentUtils.normalizeGuestNames(Array.isArray(overview.interviewees)
     ? overview.interviewees.map((person) => person.name)
     : [])
     .map(cleanFollowupSearchTerm)
@@ -1550,64 +1552,25 @@ async function generateFollowup(payload = {}) {
     .slice(0, 3);
   const topics = collectFollowupTopics(overview);
   const title = String(payload.video?.title || "").slice(0, 48);
-  const primarySubject = names[0] || cleanFollowupSearchTerm(title);
-  const biliQueries = deduplicateStrings([
-    `${primarySubject} 访谈`,
-    `${primarySubject} 对话`,
-    `${primarySubject} 播客`
-  ]).map((query) => query.slice(0, 48));
-  const webQueries = deduplicateStrings([
-    `${primarySubject} 深度访谈`,
-    `${primarySubject} 人物专访`,
-    topics[0] ? `${primarySubject} ${topics[0]}` : ""
-  ]).filter(Boolean).map((query) => query.slice(0, 70));
-  const videoBatches = await Promise.all(
-    biliQueries.map((query) =>
-      searchBilibiliVideos(query, 8).catch(() => [])
-    )
-  );
-  const webBatches = await Promise.all(
-    webQueries.map((query) => searchWeb(query, 10).catch(() => []))
-  );
-  const knowledgeBatches = await Promise.all(
-    names.map(async (name) => {
-      const results = await searchWeb(`"${name}" 百度百科`, 8).catch(() => []);
-      return results
-        .filter((item) => {
-          try {
-            const host = new URL(item.url).hostname.toLowerCase();
-            return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
-          } catch {
-            return false;
-          }
-        })
-        .map((item) => ({ ...item, media: "百度百科" }));
+  const subjects = names.length
+    ? names
+    : [cleanFollowupSearchTerm(title) || "本期嘉宾"];
+  const candidateGroups = await Promise.all(subjects.map((guestName) =>
+    collectFollowupCandidatesForGuest({
+      guestName,
+      topics,
+      title,
+      video: payload.video
     })
-  );
-  const candidates = [];
-  const seen = new Set();
-  for (const item of [
-    ...videoBatches.flat(),
-    ...webBatches.flat().filter(isUsableResearchEvidence),
-    ...knowledgeBatches.flat()
-  ]) {
-    const relevanceScore = followupRelevanceScore(item, names, topics, title);
-    if (
-      !item.url ||
-      seen.has(item.url) ||
-      isCurrentVideoResult(item, payload.video) ||
-      isSearchLandingPage(item.url) ||
-      relevanceScore < 1
-    ) continue;
-    seen.add(item.url);
-    candidates.push({
-      ...item,
-      inferredType: inferFollowupType(item),
-      relevanceScore
-    });
+  ));
+  const missingGuests = subjects.filter((_name, index) => !candidateGroups[index].length);
+  if (missingGuests.length) {
+    throw createError(
+      "FOLLOWUP_GUEST_RESULTS_MISSING",
+      `暂未检索到${missingGuests.join("、")}的可靠延伸资料，请稍后重试。`
+    );
   }
-  candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
-  candidates.splice(30);
+  const candidates = candidateGroups.flat();
   if (!candidates.length) {
     throw createError(
       "FOLLOWUP_NO_CONCRETE_RESULTS",
@@ -1615,6 +1578,7 @@ async function generateFollowup(payload = {}) {
     );
   }
 
+  const fallbackItems = candidates.map(followupItemFromCandidate);
   let result;
   try {
     result = await callAiJson({
@@ -1631,6 +1595,7 @@ async function generateFollowup(payload = {}) {
             type: "object",
             additionalProperties: false,
             properties: {
+              guestName: { type: "string", enum: subjects },
               title: { type: "string" },
               url: { type: "string" },
               type: {
@@ -1641,59 +1606,120 @@ async function generateFollowup(payload = {}) {
               why: { type: "string" },
               publishDate: { type: "string" }
             },
-            required: ["title", "url", "type", "source", "why", "publishDate"]
+            required: [
+              "guestName", "title", "url", "type", "source", "why", "publishDate"
+            ]
           }
         }
       },
       required: ["intro", "topics", "items"]
     },
     instructions:
-      "你是播客研究编辑。基于候选搜索结果，挑选6至12条最能帮助用户继续理解本期人物和主题的资料。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。结果优先保证2至5条相关视频播客，其次是其他视频，最后是文章。绝对不要推荐本期原视频。why 要具体说明与本期的连接。只能选择候选中真实存在的 URL，必须原样复制，绝不能编造链接。",
+      `你是播客研究编辑。候选资料已按被采访者标注 guestName。必须为${subjects.join("、")}每人分别挑选3至6条最能帮助用户继续理解该人物及本期主题的资料，不能只返回第一位嘉宾，也不能把甲的资料归到乙名下。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。绝对不要推荐本期原视频。why 要具体说明资料与对应嘉宾及本期的连接。guestName 和 URL 必须逐字复制候选值，绝不能编造链接或改变归属。`,
     input: JSON.stringify({
       videoTitle: title,
-      interviewees: names,
+      interviewees: subjects,
       keyTopics: topics,
       candidates
     }),
     temperature: 0.2,
-    maxTokens: 3200
+    maxTokens: 4200
     });
   } catch {
     return {
       ok: true,
-      followup: buildCandidateFollowup(candidates, names, topics)
+      followup: buildCandidateFollowup(candidates, subjects, topics)
     };
   }
-  const allowed = new Set(candidates.map((item) => item.url));
-  result.items = (Array.isArray(result.items) ? result.items : [])
-    .filter((item) => allowed.has(item.url))
+  const allowedPairs = new Set(candidates.map((item) =>
+    `${item.guestName}\n${item.url}`
+  ));
+  const selectedItems = (Array.isArray(result.items) ? result.items : [])
+    .filter((item) => allowedPairs.has(`${item.guestName}\n${item.url}`))
     .map((item) => ({
       ...item,
       type: ["podcast", "video", "article"].includes(item.type)
         ? item.type
         : inferFollowupType(item)
     }))
-    .sort((a, b) => followupTypeRank(a.type) - followupTypeRank(b.type));
-  if (!result.items.length) {
-    result.items = candidates.slice(0, 10).map((item) => ({
-      title: item.title,
-      url: item.url,
-      type: item.inferredType || inferFollowupType(item),
-      source: item.media || "网页",
-      why: item.content.slice(0, 120),
-      publishDate: item.publishDate || ""
-    }));
-  }
-  result.items = result.items.filter((item) =>
-    item?.url && !isSearchLandingPage(item.url)
-  );
+    .filter((item) => item?.url && !isSearchLandingPage(item.url));
+  result.items = ContentUtils.balanceFollowupGuestItems(
+    selectedItems,
+    fallbackItems,
+    subjects,
+    4
+  ).sort((a, b) => {
+    const guestDifference = subjects.indexOf(a.guestName) - subjects.indexOf(b.guestName);
+    return guestDifference || followupTypeRank(a.type) - followupTypeRank(b.type);
+  });
   if (!result.items.length) {
     throw createError(
       "FOLLOWUP_NO_VERIFIED_RESULTS",
       "没有得到可验证的具体资料链接，结果未保存。"
     );
   }
+  result.intro = String(result.intro ||
+    `已分别整理${subjects.join("、")}的延伸资料。`);
+  result.topics = deduplicateStrings([
+    ...subjects,
+    ...(Array.isArray(result.topics) ? result.topics : []),
+    ...topics
+  ]).slice(0, 8);
   return { ok: true, followup: result };
+}
+
+async function collectFollowupCandidatesForGuest({ guestName, topics, title, video }) {
+  const biliQueries = deduplicateStrings([
+    `${guestName} 访谈`,
+    `${guestName} 对话 播客`
+  ]).map((query) => query.slice(0, 48));
+  const webQueries = deduplicateStrings([
+    `${guestName} 深度访谈`,
+    `${guestName} 人物专访`,
+    topics[0] ? `${guestName} ${topics[0]}` : ""
+  ]).filter(Boolean).map((query) => query.slice(0, 70));
+  const [videoBatches, webBatches, knowledgeResults] = await Promise.all([
+    Promise.all(biliQueries.map((query) =>
+      searchBilibiliVideos(query, 8).catch(() => [])
+    )),
+    Promise.all(webQueries.map((query) => searchWeb(query, 10).catch(() => []))),
+    searchWeb(`"${guestName}" 百度百科`, 8).catch(() => [])
+  ]);
+  const knowledge = knowledgeResults
+    .filter((item) => {
+      try {
+        const host = new URL(item.url).hostname.toLowerCase();
+        return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
+      } catch {
+        return false;
+      }
+    })
+    .map((item) => ({ ...item, media: "百度百科" }));
+  const candidates = [];
+  const seen = new Set();
+  for (const item of [
+    ...videoBatches.flat(),
+    ...webBatches.flat().filter(isUsableResearchEvidence),
+    ...knowledge
+  ]) {
+    const relevanceScore = followupRelevanceScore(item, [guestName], topics, title);
+    if (
+      !item.url ||
+      seen.has(item.url) ||
+      isCurrentVideoResult(item, video) ||
+      isSearchLandingPage(item.url) ||
+      relevanceScore < 1
+    ) continue;
+    seen.add(item.url);
+    candidates.push({
+      ...item,
+      guestName,
+      inferredType: inferFollowupType(item),
+      relevanceScore
+    });
+  }
+  candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
+  return candidates.slice(0, 18);
 }
 
 function cleanFollowupSearchTerm(value) {
@@ -1806,19 +1832,33 @@ function stripSearchMarkup(value) {
 }
 
 function buildCandidateFollowup(candidates, names, topics) {
+  const fallbackItems = [...candidates]
+    .sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a))
+    .map(followupItemFromCandidate);
   return {
-    intro: "已从 Bilibili 与公共知识来源找到以下延伸资料。",
-    topics: [...names, ...topics].filter(Boolean).slice(0, 6),
-    items: [...candidates]
-      .sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a))
-      .slice(0, 10).map((item) => ({
-      title: item.title,
-      url: item.url,
-      type: item.inferredType || inferFollowupType(item),
-      source: item.media || "网页",
-      why: item.content?.slice(0, 140) || "与本期人物或话题相关。",
-      publishDate: item.publishDate || ""
-    }))
+    intro: `已分别整理${names.join("、")}的延伸资料。`,
+    topics: [...names, ...topics].filter(Boolean).slice(0, 8),
+    items: ContentUtils.balanceFollowupGuestItems(
+      [],
+      fallbackItems,
+      names,
+      4
+    ).sort((a, b) => {
+      const guestDifference = names.indexOf(a.guestName) - names.indexOf(b.guestName);
+      return guestDifference || followupTypeRank(a.type) - followupTypeRank(b.type);
+    })
+  };
+}
+
+function followupItemFromCandidate(item = {}) {
+  return {
+    guestName: item.guestName,
+    title: item.title,
+    url: item.url,
+    type: item.inferredType || inferFollowupType(item),
+    source: item.media || "网页",
+    why: item.content?.slice(0, 140) || `与${item.guestName || "本期嘉宾"}相关。`,
+    publishDate: item.publishDate || ""
   };
 }
 
@@ -1957,20 +1997,31 @@ async function generateRemix(payload = {}) {
   const style = allowedStyles.includes(requestedStyle) ? requestedStyle : "profile";
   const length = String(payload.length || "medium");
   const people = payload.people || {};
-  const interviewees = (Array.isArray(people.interviewees)
-    ? people.interviewees
-    : []).map((name) => String(name || "").trim()).filter(Boolean);
+  const interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
   const interviewers = (Array.isArray(people.interviewers)
     ? people.interviewers
     : []).map((name) => String(name || "").trim()).filter(Boolean);
-  const primaryGuest = interviewees[0] || "主要被采访者";
+  const requestedGuest = String(payload.selectedGuest || "")
+    .replace(/\s+/gu, "")
+    .trim();
+  if (
+    ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(style) &&
+    interviewees.length > 1 &&
+    !interviewees.includes(requestedGuest)
+  ) {
+    throw createError("REMIX_GUEST_REQUIRED", "请选择要写作的嘉宾对象。");
+  }
+  const primaryGuest = interviewees.includes(requestedGuest)
+    ? requestedGuest
+    : interviewees[0] || "主要被采访者";
+  const allGuestsLabel = interviewees.join("、") || "主要被采访者";
   const styleInstructions = {
     profile:
       `你正在单独创作“人物特写”，中心人物是${primaryGuest}。文章回答“这个人如何在一连串选择与代价中成为今天的自己”。必须全程采用第三人称非虚构叙事，作者可以观察和分析，但不能冒充嘉宾说“我”。开篇从访谈中真实出现的一个场景、动作、语气、矛盾或决定切入，不写概括式导语；随后以2至4次关键选择或转折构成叙事弧线，把经历、性格张力、行动方式和代价交织起来，不能按年份罗列履历，也不能把观点逐条复述。每节必须既有可感知的具体经历，也有克制的第三人称解释；直接引语只能来自稿本。结尾回到人物尚未解决的问题、仍在坚持的价值或下一步处境。禁止使用自传口吻，禁止写成观点议论文。`,
     first_person:
       `你正在单独创作“嘉宾第一人称自述”，叙述者只能是${primaryGuest}。文章回答“我如何回望自己的经历、选择与代价”。从标题、导语到正文都要像嘉宾本人完成的一篇自传性文章：主体叙述持续使用“我”，不得出现“嘉宾认为”“他/她表示”“作为被采访者”等外部记者口吻，也不得把主持人${interviewers.join("、") || "的"}的问题或经历写成“我”的人生。按记忆触发、关键选择、遭遇的阻力、付出的代价、今天的理解组织出清晰时间流动，保留嘉宾的语言个性与情绪，但删除重复、口头禅和问答痕迹。只能改写嘉宾在稿本中明确表达的事实、感受和判断，绝不能代写其未说过的内心活动、动机、场景或结论。结尾必须是“我”对当下处境或未来选择的自我回答。禁止第三人称人物评价，禁止写成媒体人物特写。`,
     insight_essay:
-      `你正在单独创作“深度文章”。文章不是${primaryGuest}的生平介绍，也不是其第一人称自传，而是从访谈中选择一个最有解释力、最值得展开的核心观点或认知冲突，回答“这个观点在什么条件下成立，它解释了什么，又忽略了什么”。开篇提出一个具体问题或反常识判断；随后建立清楚的中心论点，每一节承担不同的论证任务，用${primaryGuest}在访谈中的经历、观点、细节和后果作为证据，而不是按时间讲完其人生。至少分析一处矛盾、限制条件、反例或可能的反对意见，再把个人经验推向更普遍的职业、关系、创作或社会观察。作者使用分析性第三人称，不冒充嘉宾说“我”，也不对人物作传记式赞颂。结尾给出有边界的结论或值得继续追问的问题，禁止鸡汤式升华和空泛总结。`
+      `你正在单独创作“深度文章”。文章不是${allGuestsLabel}中任何一人的生平介绍，也不是其第一人称自传，而是从整场访谈中选择一个最有解释力、最值得展开的核心观点或认知冲突，回答“这个观点在什么条件下成立，它解释了什么，又忽略了什么”。开篇提出一个具体问题或反常识判断；随后建立清楚的中心论点，每一节承担不同的论证任务，综合使用${allGuestsLabel}在访谈中的经历、观点、差异、细节和后果作为证据，而不是只围绕第一位嘉宾或按时间讲完某个人生。至少分析一处矛盾、限制条件、反例或可能的反对意见，再把个人经验推向更普遍的职业、关系、创作或社会观察。作者使用分析性第三人称，不冒充嘉宾说“我”，也不对人物作传记式赞颂。结尾给出有边界的结论或值得继续追问的问题，禁止鸡汤式升华和空泛总结。`
   };
   const lengthTargets = {
     short: "约800至1200字",
@@ -2014,6 +2065,9 @@ async function generateRemix(payload = {}) {
     input: JSON.stringify({
       taskMode: style,
       primaryGuest,
+      selectedGuest: ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(style)
+        ? primaryGuest
+        : "",
       interviewees,
       interviewers,
       videoTitle: payload.video?.title || "",

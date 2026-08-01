@@ -1298,6 +1298,18 @@ h2 {
   font-size: 15px;
 }
 
+.followup-guest-title {
+  margin: 20px 0 4px;
+  padding-bottom: 7px;
+  border-bottom: 2px solid var(--accent);
+  color: var(--foreground);
+  font-size: 17px;
+}
+
+.followup-guest-title:first-child {
+  margin-top: 4px;
+}
+
 .followup-topic {
   padding: 4px 8px;
   border: 1px solid var(--border);

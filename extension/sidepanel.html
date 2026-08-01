@@ -193,6 +193,11 @@
               <option value="insight_essay">深度文章</option>
             </select>
           </label>
+          <label id="remix-guest-field" class="field"><span>选择嘉宾对象</span>
+            <select id="remix-guest" aria-label="选择内容重构的嘉宾对象">
+              <option value="">待内容地图识别嘉宾</option>
+            </select>
+          </label>
           <label class="field"><span>篇幅</span>
             <select id="remix-length">
               <option value="short">短篇 · 约 1000 字</option>
@@ -295,6 +300,7 @@
     </dialog>
 
     <script src="transcript-utils.js"></script>
+    <script src="content-utils.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

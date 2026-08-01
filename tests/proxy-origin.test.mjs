@@ -83,7 +83,7 @@ test("normalizes and limits DeepSeek web search results", () => {
   assert.deepEqual(normalizeDeepSeekWebSearchResponse(payload, 2), [
     {
       title: "人物资料",
-      content: "",
+      content: "人物资料",
       link: "https://baike.baidu.com/item/example",
       media: "",
       publish_date: "2026-07-31"
