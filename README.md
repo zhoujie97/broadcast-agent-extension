@@ -31,7 +31,7 @@
 5. 选择解压后的扩展文件夹。
 6. 打开并刷新 Bilibili 视频页面，然后点击扩展图标。
 
-普通用户不需要下载整个源码仓库，也不需要填写 DeepSeek 或智谱 API Key。
+普通用户不需要下载整个源码仓库，也不需要填写 DeepSeek API Key。
 
 ## 从源码构建
 
@@ -61,16 +61,14 @@ dist/broadcast-agent-extension.zip
 | 能力 | 服务 |
 | --- | --- |
 | 内容地图、切片、问答、重构、纠错 | DeepSeek |
-| 百度百科人物检索、延伸探索 | 智谱 Web Search API |
+| 百度百科人物检索、延伸探索 | DeepSeek Web Search |
 | API Key、来源校验和限流 | Vercel Functions |
 
 Vercel 至少需要配置：
 
 ```text
-AI_PROVIDER=deepseek
 AI_MODEL=deepseek-v4-flash
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
-ZHIPU_API_KEY=你的智谱 API Key
 SESSION_SIGNING_SECRET=至少 24 字符的随机字符串
 ALLOWED_EXTENSION_ORIGINS=chrome-extension://你的正式扩展ID
 ```

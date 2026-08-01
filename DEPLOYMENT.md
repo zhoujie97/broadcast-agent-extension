@@ -1,6 +1,6 @@
 # 播客智能阅读助手上线手册
 
-本文档对应当前代码版本 `0.23.6`。目标是把 AI 代理部署到 Vercel，再以 Hidden 方式发布到 Microsoft Edge Add-ons，先验证真实用户体验与 AI 成本。
+本文档对应当前代码版本 `1.0.15`。目标是把 AI 代理部署到 Vercel，再以 Hidden 方式发布到 Microsoft Edge Add-ons，先验证真实用户体验与 AI 成本。
 
 ## 1. 发布结构
 
@@ -11,10 +11,10 @@ Bilibili 页面
             ├─ 匿名安装会话
             ├─ CORS 来源限制
             ├─ 请求频率与用量保护
-            └─ 智谱 GLM API
+            └─ DeepSeek API（对话与联网搜索）
 ```
 
-模型、备用模型、限额和密钥都通过服务端环境变量配置。代理支持智谱和 DeepSeek；切换模型时无需重新发布扩展。
+模型、备用模型、限额和密钥都通过服务端环境变量配置。代理统一使用 DeepSeek；切换 DeepSeek 兼容模型时无需重新发布扩展。
 
 ## 2. Vercel Functions
 
@@ -34,13 +34,11 @@ Bilibili 页面
 3. Framework Preset 选择 **Other**，Root Directory 保持仓库根目录。
 4. 在 Environment Variables 中录入：
    - `DEEPSEEK_API_KEY`：DeepSeek 正式密钥（使用 DeepSeek 对话模型时必填）。
-   - `ZHIPU_API_KEY`：智谱正式密钥（使用智谱对话模型或保留智谱联网搜索时必填）。
    - `SESSION_SIGNING_SECRET`：至少 24 字符的随机字符串。
    - `ALLOWED_EXTENSION_ORIGINS`：正式发布优先填写固定 Origin，例如 `chrome-extension://babomghgdgifmepkmndbepfidadbhffo`。多个 Origin 用英文逗号分隔。侧载测试阶段可暂时填写 `chrome-extension://*`，它只匹配格式合法的 Chrome/Edge 扩展 Origin；拿到正式扩展 ID 后应改回固定值。
-   - `AI_PROVIDER`：推荐 `deepseek`
    - `AI_MODEL`：推荐 `deepseek-v4-flash`
    - `AI_FALLBACK_MODEL`：可留空。
-   - `WEB_SEARCH_PROVIDER`：当前填写 `zhipu`；DeepSeek 官方对话 API 不提供本项目所需的独立网页搜索接口。
+   - 人物资料和延伸探索通过 DeepSeek Anthropic 兼容接口的 Web Search 工具完成，不需要第二个供应商密钥。
 5. 点击 Deploy。部署成功后访问 `https://你的项目.vercel.app/health`，应返回 `{"ok":true,...}`。
 
 不要把任何 API Key 提交到 Git、扩展代码、聊天、截图或日志中。
@@ -56,7 +54,7 @@ GLOBAL_DAILY_UNITS=5000
 MAX_BODY_BYTES=1048576
 ```
 
-Vercel Functions 可能横向扩容或重启，当前进程内限流只作为第一层保护，不能视为跨实例的严格全局额度。正式公开发布前，务必同时在智谱控制台配置预算或消费上限；用户量增长后再接入持久化限流存储。
+Vercel Functions 可能横向扩容或重启，当前进程内限流只作为第一层保护，不能视为跨实例的严格全局额度。正式公开发布前，务必同时在 DeepSeek 控制台配置预算或消费上限；用户量增长后再接入持久化限流存储。
 
 ### 2.3 环境变量更新
 
@@ -110,7 +108,6 @@ dist/broadcast-agent-extension.zip
 在服务端修改：
 
 ```text
-AI_PROVIDER=deepseek
 AI_MODEL=新模型名
 AI_FALLBACK_MODEL=备用模型名
 ```
@@ -119,8 +116,8 @@ AI_FALLBACK_MODEL=备用模型名
 
 ## 8. 日常运维
 
-- 监控函数请求量、429、上游错误率、延迟和智谱费用。
-- 异常时先在智谱侧停用或限制密钥，再排查来源。
-- 定期轮换 `DEEPSEEK_API_KEY` 和仍在使用的 `ZHIPU_API_KEY`。
+- 监控函数请求量、429、上游错误率、延迟和 DeepSeek 费用。
+- 异常时先在 DeepSeek 侧停用或限制密钥，再排查来源。
+- 定期轮换 `DEEPSEEK_API_KEY`。
 - 轮换 `SESSION_SIGNING_SECRET` 会使已有匿名会话失效并自动重新注册。
 - 扩展升级时递增版本号并重新生成 ZIP。

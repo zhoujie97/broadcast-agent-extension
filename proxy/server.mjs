@@ -5,29 +5,17 @@ const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT) || 8787;
 const IS_VERCEL = process.env.VERCEL === "1";
 const IS_LOCAL = !IS_VERCEL && HOST === "127.0.0.1";
-const ZHIPU_API_KEY = String(process.env.ZHIPU_API_KEY || "").trim();
 const DEEPSEEK_API_KEY = String(process.env.DEEPSEEK_API_KEY || "").trim();
-const AI_PROVIDER = String(process.env.AI_PROVIDER || "zhipu")
-  .trim()
-  .toLowerCase();
-const MODEL = String(
-  process.env.AI_MODEL ||
-  (AI_PROVIDER === "deepseek" ? "deepseek-v4-flash" : "glm-4.7-flash")
-).trim();
+const MODEL = String(process.env.AI_MODEL || "deepseek-v4-flash").trim();
 const FALLBACK_MODEL = String(process.env.AI_FALLBACK_MODEL || "").trim();
-const WEB_SEARCH_PROVIDER = String(
-  process.env.WEB_SEARCH_PROVIDER || "zhipu"
-).trim().toLowerCase();
 const SESSION_SIGNING_SECRET = String(
   process.env.SESSION_SIGNING_SECRET || (
     IS_LOCAL ? "local-development-only-secret" : ""
   )
 ).trim();
-const ZHIPU_CHAT_URL =
-  "https://open.bigmodel.cn/api/paas/v4/chat/completions";
-const ZHIPU_WEB_SEARCH_URL =
-  "https://open.bigmodel.cn/api/paas/v4/web_search";
 const DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions";
+const DEEPSEEK_ANTHROPIC_MESSAGES_URL =
+  "https://api.deepseek.com/anthropic/v1/messages";
 const MAX_BODY_BYTES = clamp(
   Number(process.env.MAX_BODY_BYTES),
   64 * 1024,
@@ -112,10 +100,10 @@ export async function handleProxyRequest(request, response) {
     if (corsOrigin) setCorsHeaders(response, corsOrigin);
     return sendJson(response, 200, {
       ok: true,
-      provider: AI_PROVIDER,
+      provider: "deepseek",
       model: MODEL,
       fallbackConfigured: Boolean(FALLBACK_MODEL),
-      webSearchProvider: WEB_SEARCH_PROVIDER,
+      webSearchProvider: "deepseek",
       webSearchConfigured: isWebSearchConfigured()
     });
   }
@@ -210,18 +198,8 @@ export async function handleProxyRequest(request, response) {
 }
 
 function assertProductionConfiguration() {
-  if (!["zhipu", "deepseek"].includes(AI_PROVIDER)) {
-    throw httpError(
-      503,
-      "PROVIDER_NOT_SUPPORTED",
-      `当前版本暂不支持 AI_PROVIDER=${AI_PROVIDER}`
-    );
-  }
-  if (!chatApiKey()) {
-    const variable = AI_PROVIDER === "deepseek"
-      ? "DEEPSEEK_API_KEY"
-      : "ZHIPU_API_KEY";
-    throw httpError(503, "PROXY_NOT_CONFIGURED", `缺少 ${variable}。`);
+  if (!DEEPSEEK_API_KEY) {
+    throw httpError(503, "PROXY_NOT_CONFIGURED", "缺少 DEEPSEEK_API_KEY。");
   }
   if (!SESSION_SIGNING_SECRET || SESSION_SIGNING_SECRET.length < 24) {
     throw httpError(
@@ -246,17 +224,13 @@ async function requestChatCompletion({
   maxTokens,
   responseFormat
 }) {
-  const apiKey = chatApiKey();
-  const chatUrl = AI_PROVIDER === "deepseek"
-    ? DEEPSEEK_CHAT_URL
-    : ZHIPU_CHAT_URL;
   const requestModel = async (selectedModel) => fetchWithTimeout(
-    chatUrl,
+    DEEPSEEK_CHAT_URL,
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${DEEPSEEK_API_KEY}`
       },
       body: JSON.stringify({
         model: selectedModel,
@@ -277,45 +251,74 @@ async function requestChatCompletion({
   return requestModel(FALLBACK_MODEL);
 }
 
-function chatApiKey() {
-  return AI_PROVIDER === "deepseek" ? DEEPSEEK_API_KEY : ZHIPU_API_KEY;
-}
-
 function isWebSearchConfigured() {
-  return WEB_SEARCH_PROVIDER === "zhipu" && Boolean(ZHIPU_API_KEY);
+  return Boolean(DEEPSEEK_API_KEY);
 }
 
 async function requestWebSearch({ query, count, domain = "" }) {
-  if (WEB_SEARCH_PROVIDER !== "zhipu") {
-    throw httpError(
-      503,
-      "WEB_SEARCH_PROVIDER_NOT_SUPPORTED",
-      `当前版本暂不支持 WEB_SEARCH_PROVIDER=${WEB_SEARCH_PROVIDER}`
-    );
-  }
-  if (!ZHIPU_API_KEY) {
+  if (!DEEPSEEK_API_KEY) {
     throw httpError(
       503,
       "WEB_SEARCH_NOT_CONFIGURED",
-      "联网搜索未配置；请设置 ZHIPU_API_KEY，或暂时关闭依赖联网搜索的功能。"
+      "联网搜索未配置；请设置 DEEPSEEK_API_KEY。"
     );
   }
-  return fetchWithTimeout(ZHIPU_WEB_SEARCH_URL, {
+  const upstream = await fetchWithTimeout(DEEPSEEK_ANTHROPIC_MESSAGES_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${ZHIPU_API_KEY}`
+      "x-api-key": DEEPSEEK_API_KEY,
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
-      search_query: query,
-      search_engine: "search_std",
-      search_intent: false,
-      count,
-      ...(domain ? { search_domain_filter: domain } : {}),
-      search_recency_filter: "noLimit",
-      content_size: "medium"
+      model: MODEL,
+      max_tokens: 1024,
+      thinking: { type: "disabled" },
+      messages: [{
+        role: "user",
+        content: `请联网搜索“${query}”，只返回与查询直接相关的可靠结果。`
+      }],
+      tools: [{
+        type: "web_search_20250305",
+        name: "web_search",
+        max_uses: 1,
+        ...(domain ? { allowed_domains: [domain] } : {})
+      }]
     })
   });
+  if (!upstream.ok) return upstream;
+  const payload = await upstream.json().catch(() => ({}));
+  return new Response(JSON.stringify({
+    search_result: normalizeDeepSeekWebSearchResponse(payload, count)
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+export function normalizeDeepSeekWebSearchResponse(payload, count = 10) {
+  const blocks = Array.isArray(payload?.content) ? payload.content : [];
+  const results = [];
+  const seenUrls = new Set();
+  for (const block of blocks) {
+    if (block?.type !== "web_search_tool_result") continue;
+    const items = Array.isArray(block.content) ? block.content : [];
+    for (const item of items) {
+      if (item?.type !== "web_search_result") continue;
+      const link = String(item.url || item.link || "").trim();
+      if (!/^https?:\/\//iu.test(link) || seenUrls.has(link)) continue;
+      seenUrls.add(link);
+      results.push({
+        title: String(item.title || "未命名结果"),
+        content: String(item.snippet || item.content || ""),
+        link,
+        media: String(item.source || ""),
+        publish_date: String(item.page_age || item.publish_date || "")
+      });
+      if (results.length >= clamp(Number(count), 1, 20, 10)) return results;
+    }
+  }
+  return results;
 }
 
 export function normalizeSearchDomain(value) {
@@ -622,7 +625,7 @@ if (!IS_VERCEL) {
       event: "server_started",
       host: HOST,
       port: PORT,
-      provider: AI_PROVIDER,
+      provider: "deepseek",
       model: MODEL
     }));
   });

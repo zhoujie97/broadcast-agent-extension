@@ -1,7 +1,7 @@
 {
   "name": "broadcast-agent-extension",
   "private": true,
-  "version": "0.23.6",
+  "version": "1.0.15",
   "scripts": {
     "proxy": "node proxy/server.mjs",
     "test": "node --test tests/*.test.mjs",
