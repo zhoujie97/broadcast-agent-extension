@@ -2,6 +2,8 @@
 
 这是一个用于验证 Bilibili 智能稿本读取、播放器跳转、视频内笔记与 AI 阅读工作区的 Manifest V3 扩展。
 
+最新版本说明：[v1.0.15 版本说明](../docs/v1.0.15-release-notes.md)
+
 ## 已实现
 
 - 读取当前 Bilibili 视频的中文字幕轨和时间戳
