@@ -1,3 +1,5 @@
+importScripts("person-utils.js");
+
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
   // Production builds should replace this with the deployed HTTPS proxy URL.
@@ -7,6 +9,8 @@ const AI_CONFIG = Object.freeze({
 });
 const PROXY_INSTALLATION_KEY = "proxyInstallationId";
 const PROXY_SESSION_KEY = "proxyAnonymousSession";
+const WEB_SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
+const pendingWebSearches = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.remove("aiConfig").catch(() => {});
@@ -44,11 +48,16 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("clipFavorites:") ||
       key.startsWith("contentValueRadarV3:") ||
       key.startsWith("contentValueRadarV4:") ||
+      key.startsWith("contentValueRadarV5:") ||
+      key.startsWith("contentValueRadarV6:") ||
+      key.startsWith("contentValueRadarV7:") ||
       key.startsWith("contentMap:") ||
       key.startsWith("contentMapV2:") ||
       key.startsWith("contentMapV3:") ||
       key.startsWith("contentMapV4:") ||
       key.startsWith("contentMapV5:") ||
+      key.startsWith("contentMapV6:") ||
+      key.startsWith("contentMapV7:") ||
       key.startsWith("remix:") ||
       key.startsWith("remixV2:") ||
       key.startsWith("remixV3:") ||
@@ -128,6 +137,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "CORRECT_OVERVIEW") {
+    correctOverview(message.payload)
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
   if (message?.type === "GENERATE_CLIP_CANDIDATES") {
     generateClipCandidates(message.payload)
       .then(sendResponse)
@@ -163,6 +179,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "SET_CORRECTED_TRANSCRIPT") {
+    setCorrectedTranscript(message.payload)
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
   return false;
 });
 
@@ -189,6 +212,28 @@ async function loadTranscriptForActiveTab() {
       url: tab.url
     }
   };
+}
+
+async function setCorrectedTranscript(payload = {}) {
+  const segments = requireTranscriptSegments(payload.segments);
+  const { lastTranscript } = await chrome.storage.session.get("lastTranscript");
+  if (
+    !lastTranscript?.video ||
+    getVideoCacheKey(lastTranscript.video) !== getVideoCacheKey(payload.video)
+  ) {
+    throw createError(
+      "TRANSCRIPT_NOT_READY",
+      "当前视频稿本尚未准备完成，请重新加载后再修正。"
+    );
+  }
+  await chrome.storage.session.set({
+    lastTranscript: {
+      ...lastTranscript,
+      segments: segments.map(toAiSegment),
+      correctedAt: Date.now()
+    }
+  });
+  return { ok: true };
 }
 
 async function getAiServiceStatus() {
@@ -259,7 +304,8 @@ async function explainSegment(payload = {}, force = false) {
         : [],
       targetSegment: toAiSegment(segment)
     }),
-    temperature: 0.3
+    temperature: 0.3,
+    maxTokens: 900
   });
 
   await chrome.storage.session.set({ [cacheKey]: result });
@@ -277,7 +323,7 @@ function simpleTextHash(text) {
 
 async function generateOverview(payload = {}) {
   const segments = requireTranscriptSegments(payload.segments);
-  const transcript = prepareTranscriptForAi(segments, 140000);
+  const transcript = prepareTranscriptForAi(segments, 80000);
   const videoTitle = payload.video?.title || "";
   const webResults = await searchWeb(
     `${videoTitle.slice(0, 46)} ${payload.video?.publisher || ""} 嘉宾 简介`,
@@ -414,11 +460,12 @@ async function generateOverview(payload = {}) {
       webResults
     }),
     temperature: 0.2,
-    maxTokens: 6000,
+    maxTokens: 4800,
     validateResult: contentMapValidationIssues
   });
   const allowedUrls = new Set(webResults.map((item) => item.url));
   canonicalizePeopleFromVideo(result, payload.video);
+  await correctPeopleNamesFromTitle(result, payload.video);
   sanitizeUnsupportedContentMapYears(result, [
     videoTitle,
     payload.video?.description || "",
@@ -437,13 +484,107 @@ async function generateOverview(payload = {}) {
     .map((person) => validateHighRiskFacts(person, webResults));
   result.interviewees = filterPersonSourceLinks(result.interviewees, allowedUrls)
     .map((person) => validateHighRiskFacts(person, webResults));
-  const enriched = await enrichPeople(result, payload.video).catch(() => null);
+  const [enriched] = await Promise.all([
+    enrichPeople(result, payload.video, transcript, webResults).catch(() => null),
+    enrichMissingLifePeriods(result, webResults).catch(() => {})
+  ]);
   if (enriched) {
     result.interviewers = enriched.interviewers;
     result.interviewees = enriched.interviewees;
   }
-  await enrichMissingLifePeriods(result, webResults).catch(() => {});
   return { ok: true, overview: result };
+}
+
+async function correctOverview(payload = {}) {
+  const feedback = String(payload.feedback || "").replace(/\s+/gu, " ").trim();
+  if (feedback.length < 4 || feedback.length > 1000) {
+    throw createError(
+      "INVALID_CORRECTION_FEEDBACK",
+      "请用 4 至 1000 个字符说明需要核实的问题。"
+    );
+  }
+  const currentOverview = payload.overview;
+  const currentIssues = contentMapValidationIssues(currentOverview);
+  if (currentIssues.length) {
+    throw createError(
+      "INVALID_CURRENT_OVERVIEW",
+      `当前内容地图不完整：${currentIssues.join("；")}。`
+    );
+  }
+  const segments = requireTranscriptSegments(payload.segments);
+  const transcript = prepareTranscriptForAi(segments, 60000);
+  const video = payload.video || {};
+  const webResults = await searchWeb(
+    `${String(video.title || "").slice(0, 42)} ${feedback.slice(0, 24)} 核实`,
+    15
+  ).catch(() => []);
+  const decision = await callAiJson({
+    schemaName: "content_map_correction",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        issueConfirmed: { type: "boolean" },
+        explanation: { type: "string" },
+        correctedOverview: { type: "object" }
+      },
+      required: ["issueConfirmed", "explanation", "correctedOverview"]
+    },
+    instructions:
+      "你是内容地图的事实纠错编辑。用户反馈只是待核实线索，不能无条件采纳。先结合视频标题、发布者、原声文稿、现有内容地图和搜索证据判断反馈是否成立。姓名冲突时优先采用视频标题中的原字，但只有当至少两条不同搜索结果也明确支持该姓名时才可改字。人物身份必须确认其确实是本期采访者或被采访者，并确认外部简介属于当前视频中的同一人。人物资料优先采用百度百科；不要使用 Wikidata 或维基百科。若反馈不成立，issueConfirmed=false，correctedOverview 原样返回。若成立，只修正有证据支持的问题，其他字段保持不变，并返回完整 correctedOverview。sourceLinks 只能使用现有内容地图或搜索候选中真实存在的 URL，不得编造。不要把推测写成事实。",
+    input: JSON.stringify({
+      feedback,
+      video: {
+        title: video.title || "",
+        publisher: video.publisher || "",
+        description: video.description || ""
+      },
+      transcript,
+      currentOverview,
+      webResults
+    }),
+    temperature: 0,
+    maxTokens: 5600
+  });
+  if (decision.issueConfirmed !== true) {
+    return {
+      ok: true,
+      corrected: false,
+      explanation: decision.explanation || "未找到足够证据支持这项修改。"
+    };
+  }
+
+  const corrected = decision.correctedOverview;
+  canonicalizePeopleFromVideo(corrected, video);
+  await correctPeopleNamesFromTitle(corrected, video);
+  sanitizeUnsupportedContentMapYears(corrected, [
+    video.title || "",
+    video.description || "",
+    ...transcript.map((segment) => segment.text || ""),
+    ...webResults.flatMap((item) => [item.title || "", item.content || ""])
+  ].join(" "));
+  normalizeContentMapResult(corrected, transcript);
+  const correctedIssues = contentMapValidationIssues(corrected);
+  if (correctedIssues.length) {
+    throw createError(
+      "AI_CORRECTION_INCOMPLETE",
+      `AI 核实了问题，但修正结果不完整：${correctedIssues.join("；")}。`
+    );
+  }
+  const [enriched] = await Promise.all([
+    enrichPeople(corrected, video, transcript, webResults).catch(() => null),
+    enrichMissingLifePeriods(corrected, webResults).catch(() => {})
+  ]);
+  if (enriched) {
+    corrected.interviewers = enriched.interviewers;
+    corrected.interviewees = enriched.interviewees;
+  }
+  return {
+    ok: true,
+    corrected: true,
+    explanation: decision.explanation || "问题已核实并修正。",
+    overview: corrected
+  };
 }
 
 async function generateClipCandidates(payload = {}) {
@@ -499,12 +640,26 @@ async function generateClipCandidates(payload = {}) {
                 }
               },
               topics: { type: "array", items: { type: "string" } },
-              bgmSuggestion: { type: "string" }
+              bgmSuggestions: {
+                type: "array",
+                minItems: 3,
+                maxItems: 3,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    title: { type: "string" },
+                    artist: { type: "string" },
+                    reason: { type: "string" }
+                  },
+                  required: ["title", "artist", "reason"]
+                }
+              }
             },
             required: [
               "from", "to", "type", "title", "quote", "scores", "valuePortrait",
               "whyRecommended", "signals", "scenarios",
-              "topics", "bgmSuggestion"
+              "topics", "bgmSuggestions"
             ]
           }
         }
@@ -512,14 +667,14 @@ async function generateClipCandidates(payload = {}) {
       required: ["intro", "clips"]
     },
     instructions:
-      "你是长内容价值分析师，不是单纯的短视频剪辑助手。请从完整原声文稿中识别8至10个彼此不重复、最值得观看、理解或二次利用的关键内容节点。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。五项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，practicalInspiration评估能否转化为行动或方法启发，spreadPotential评估传播与讨论潜力。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 只保留短视频传播、深度文章两种场景，fit只能为高、中、低，并分别给出推荐标题和简短适配建议，不要出现任何平台名称。topics 和 bgmSuggestion 仅服务于短视频场景。bgmSuggestion 必须先推荐一首真实存在的具体音乐，写明‘曲名 — 作者/艺人或曲库来源’，再补充一句情绪、节奏与进入时机建议；优先选择器乐、公共领域作品或常见免版税音乐，不能确认授权时明确提示商用前核对版权，绝不能编造曲名。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
+      "你是长内容价值分析师，不是单纯的短视频剪辑助手。请从完整原声文稿中识别8至10个彼此不重复、最值得观看、理解或二次利用的关键内容节点。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。五项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，practicalInspiration评估能否转化为行动或方法启发，spreadPotential评估传播与讨论潜力。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 只保留短视频传播、深度文章两种场景，fit只能为高、中、低，并分别给出推荐标题和简短适配建议，不要出现任何平台名称。topics 和 bgmSuggestions 仅服务于短视频场景。每个片段必须推荐三首彼此不同、真实存在且可在抖音搜索的歌曲。title 必须填写歌曲正式名称，artist 必须填写准确歌手或音乐人；reason 只说明歌曲的情绪、节奏和内容气质为什么适合当前片段，不要给出任何切入时间、播放位置、使用步骤或‘高潮处播放’之类的建议。优先选择辨识度较高、适合作为短视频背景音乐且容易按歌名与歌手检索的歌曲，但不要声称歌曲当前热门，不得编造歌名或歌手。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
     input: JSON.stringify({
       videoTitle: payload.video?.title || "",
       duration: Number(payload.video?.duration) || null,
       transcript
     }),
     temperature: 0.3,
-    maxTokens: 8000,
+    maxTokens: 6500,
     validateResult: clipCandidateValidationIssues
   });
 
@@ -627,15 +782,18 @@ function normalizeClipCandidates(result, segments) {
       topics: (Array.isArray(raw.topics) ? raw.topics : [])
         .map((topic) => String(topic || "").replace(/^#+/u, "").trim())
         .filter(Boolean).slice(0, 6),
-      bgmSuggestion: String(
-        raw.bgmSuggestion ||
-        "未找到可可靠核验的具体音乐；可选低存在感器乐，人物说话时降低音量。"
-      ).trim()
+      bgmSuggestions: (Array.isArray(raw.bgmSuggestions)
+        ? raw.bgmSuggestions
+        : []).map((bgm) => ({
+        title: String(bgm?.title || "").trim(),
+        artist: String(bgm?.artist || "").trim(),
+        reason: String(bgm?.reason || "").trim()
+      })).filter((bgm) => bgm.title && bgm.artist).slice(0, 3)
     });
   }
   clips.sort((a, b) => b.valueScore - a.valueScore || a.from - b.from);
   return {
-    version: 3,
+    version: 6,
     intro: String(result?.intro || "AI 已按传播、认知与二次创作价值整理关键内容节点。"),
     clips: clips.slice(0, 10)
   };
@@ -655,12 +813,25 @@ function clipCandidateValidationIssues(result) {
     Number.isFinite(Number(clip?.to)) &&
     Number(clip.to) > Number(clip.from) + 3 &&
     String(clip?.title || "").trim().length >= 4 &&
-    String(clip?.whyRecommended || "").trim().length >= 12
+    String(clip?.whyRecommended || "").trim().length >= 12 &&
+    Array.isArray(clip?.bgmSuggestions) &&
+    clip.bgmSuggestions.filter((bgm) =>
+      String(bgm?.title || "").trim() &&
+      String(bgm?.artist || "").trim() &&
+      String(bgm?.reason || "").trim() &&
+      !containsBgmUsageInstruction(bgm.reason)
+    ).length === 3
   );
   if (validClips.length < 6) {
     issues.push(`有效高光区间不足 6 个（当前 ${validClips.length} 个）`);
   }
   return issues;
+}
+
+function containsBgmUsageInstruction(reason) {
+  return /(?:切入|进入时机|播放位置|开始播放|高潮处|在.{0,18}(?:时|处|后)(?:开始)?播放)/u.test(
+    String(reason || "")
+  );
 }
 
 function canonicalizePeopleFromVideo(overview, video = {}) {
@@ -704,6 +875,33 @@ function canonicalizePeopleFromVideo(overview, video = {}) {
   }
 }
 
+async function correctPeopleNamesFromTitle(overview, video = {}) {
+  const title = String(video.title || "").trim();
+  if (!title) return;
+  const groups = [
+    ...(Array.isArray(overview.interviewers) ? overview.interviewers : []),
+    ...(Array.isArray(overview.interviewees) ? overview.interviewees : [])
+  ];
+  await Promise.all(groups.map(async (person) => {
+    const originalName = PersonUtils.normalizeName(person?.name);
+    const candidate = PersonUtils.findNearNameInTitle(originalName, title);
+    if (!candidate) return;
+    const results = await searchWeb(
+      `"${candidate}" ${title.slice(0, 42)}`,
+      10
+    ).catch(() => []);
+    if (PersonUtils.countEvidenceSupport(results, candidate) < 2) return;
+    person.name = candidate;
+    for (const trajectory of Array.isArray(overview.lifeTrajectories)
+      ? overview.lifeTrajectories
+      : []) {
+      if (PersonUtils.normalizeName(trajectory?.personName) === originalName) {
+        trajectory.personName = candidate;
+      }
+    }
+  }));
+}
+
 function extractPeopleHintsFromTitle(title) {
   const normalized = String(title || "")
     .replace(/[《》【】]/gu, " ")
@@ -740,7 +938,12 @@ function emptyPersonProfile(name, role) {
   };
 }
 
-async function enrichPeople(overview, video = {}) {
+async function enrichPeople(
+  overview,
+  video = {},
+  transcript = [],
+  existingEvidence = []
+) {
   const interviewers = Array.isArray(overview.interviewers)
     ? overview.interviewers
     : [];
@@ -752,27 +955,34 @@ async function enrichPeople(overview, video = {}) {
     .slice(0, 6);
   if (!people.length) return null;
 
-  const knowledgeProfiles = await Promise.all(
-    people.map((person) => fetchPublicKnowledgeProfile(person.name).catch(() => null))
-  );
-  const knowledgeByName = new Map(
-    knowledgeProfiles.filter(Boolean).map((profile) => [profile.name, profile])
-  );
-
   const videoContext = String(video.title || "").slice(0, 54);
   const evidenceGroups = await Promise.all(people.map(async (person) => {
     const queries = [
-      `"${person.name}" 人物 专访 简介 代表作品`,
-      videoContext
-        ? `"${person.name}" ${videoContext}`
-        : `"${person.name}" 内容创作者 职业经历`
+      {
+        query: person.name,
+        count: 6,
+        domain: "baike.baidu.com"
+      },
+      {
+        query: videoContext
+          ? `"${person.name}" ${videoContext}`
+          : `"${person.name}" 内容创作者 职业经历`,
+        count: 8
+      }
     ];
     const batches = await Promise.all(
-      queries.map((query) => searchWeb(query, 8).catch(() => []))
+      queries.map(({ query, count, domain }) =>
+        searchWeb(query, count, { domain }).catch(() => [])
+      )
     );
     return {
       name: person.name,
-      results: rankPersonEvidence(deduplicateSearchResults(batches.flat(), 12))
+      results: rankPersonEvidence(deduplicateSearchResults([
+        ...existingEvidence.filter((item) =>
+          PersonUtils.countEvidenceSupport([item], person.name) === 1
+        ),
+        ...batches.flat()
+      ], 12))
     };
   }));
   const candidates = deduplicateSearchResults(
@@ -780,10 +990,7 @@ async function enrichPeople(overview, video = {}) {
     40
   );
   if (!candidates.length) {
-    return {
-      interviewers: applyKnowledgeProfiles(interviewers, knowledgeByName),
-      interviewees: applyKnowledgeProfiles(interviewees, knowledgeByName)
-    };
+    return attachBaiduLinks({ interviewers, interviewees }, evidenceGroups);
   }
   let result;
   try {
@@ -799,30 +1006,36 @@ async function enrichPeople(overview, video = {}) {
       required: ["interviewers", "interviewees"]
     },
     instructions:
-      "你是严格的事实核查编辑。保留输入中已经识别的采访者和被采访者身份，不要互换角色。只写搜索候选明确支持的稳定事实，优先采用本人、政府、机构官网和权威媒体等一手或权威来源。人物简介仅包含职业身份、长期经历与代表性作品；禁止写近期节目阵容、热搜或未经可靠来源支持的娱乐履历。奖项、职务、纪录、数字和时间必须有直接证据；来源冲突且无法消除时删除该事实，绝不凭模型记忆补全。sourceLinks 只能原样复制实际用于核实内容的候选 URL。不要输出 Markdown 星号。宁可少写也不要猜测，但已有可靠候选时必须提炼出一段简洁简介，不能只返回“暂无资料”。",
+      "你是严格的采访人物身份复核与事实核查编辑。先逐一判断输入人物是否确实是当前视频中的采访者或被采访者，并判断候选外部资料是否属于同一个人，再输出通过核实的人物资料；只被谈到但没有参与本期对话的人必须删除，姓名相同但职业、作品或经历与视频语境冲突的候选必须排除，证据不足时保留人物但清空不确定的外部简介。不得互换采访者和被采访者。人物外部资料优先采用百度百科，不使用 Wikidata 或维基百科。只写搜索候选明确支持的稳定事实，其次采用本人、政府、机构官网和权威媒体等一手或权威来源。人物简介仅包含职业身份、长期经历与代表性作品；禁止写近期节目阵容、热搜或未经可靠来源支持的娱乐履历。奖项、职务、纪录、数字和时间必须有直接证据；来源冲突且无法消除时删除该事实，绝不凭模型记忆补全。sourceLinks 只能原样复制实际用于核实内容的候选 URL。不要输出 Markdown 星号。宁可少写也不要猜测。",
     input: JSON.stringify({
       currentDate: new Date().toISOString().slice(0, 10),
+      video: {
+        title: video.title || "",
+        publisher: video.publisher || "",
+        description: video.description || ""
+      },
       interviewers,
       interviewees,
+      transcriptContext: prepareTranscriptForAi(transcript, 16000),
       evidenceGroups
     }),
     temperature: 0,
-    maxTokens: 5000
+    maxTokens: 2800
     });
   } catch {
     return {
-      interviewers: applyKnowledgeProfiles(interviewers.map((person) =>
+      interviewers: interviewers.map((person) =>
         validateHighRiskFacts(
           buildSearchFallbackProfile(person, evidenceGroups),
           candidates
         )
-      ), knowledgeByName),
-      interviewees: applyKnowledgeProfiles(interviewees.map((person) =>
+      ),
+      interviewees: interviewees.map((person) =>
         validateHighRiskFacts(
           buildSearchFallbackProfile(person, evidenceGroups),
           candidates
         )
-      ), knowledgeByName)
+      )
     };
   }
   const allowedUrls = new Set(candidates.map((item) => item.url));
@@ -838,46 +1051,59 @@ async function enrichPeople(overview, video = {}) {
     candidates,
     evidenceGroups
   );
+  return attachBaiduLinks({
+    interviewers: verifiedInterviewers,
+    interviewees: verifiedInterviewees
+  }, evidenceGroups);
+}
+
+function attachBaiduLinks(peopleGroups, evidenceGroups) {
+  const attach = (people) => (Array.isArray(people) ? people : []).map((person) => {
+    const existingLinks = Array.isArray(person.sourceLinks)
+      ? person.sourceLinks
+      : [];
+    if (existingLinks.some((link) => {
+      try {
+        const host = new URL(link.url).hostname.toLowerCase();
+        return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
+      } catch {
+        return false;
+      }
+    })) {
+      return person;
+    }
+    const baiduCandidate = evidenceGroups
+      .find((group) => group.name === person.name)
+      ?.results.find((item) => {
+        try {
+          const host = new URL(item.url).hostname.toLowerCase();
+          return (
+            (host === "baike.baidu.com" || host.endsWith(".baike.baidu.com")) &&
+            PersonUtils.countEvidenceSupport([item], person.name) === 1
+          );
+        } catch {
+          return false;
+        }
+      });
+    const source = baiduCandidate
+      ? { title: `百度百科：${person.name}`, url: baiduCandidate.url }
+      : {
+          title: `在百度百科中核实：${person.name}`,
+          url: `https://baike.baidu.com/search?word=${encodeURIComponent(person.name)}`
+        };
+    return { ...person, sourceLinks: [...existingLinks, source] };
+  });
   return {
-    interviewers: applyKnowledgeProfiles(verifiedInterviewers, knowledgeByName),
-    interviewees: applyKnowledgeProfiles(verifiedInterviewees, knowledgeByName)
+    interviewers: attach(peopleGroups.interviewers),
+    interviewees: attach(peopleGroups.interviewees)
   };
-}
-
-function applyKnowledgeProfiles(people, knowledgeByName) {
-  return people.map((person) => {
-    const knowledge = knowledgeByName.get(person.name);
-    if (!knowledge) return person;
-    const missing = (value) =>
-      !String(value || "").trim() || /^(?:暂无|未检索到|公共知识库暂无)/u.test(value);
-    const genericRole = /^(?:采访者|被采访者|人物资料)$/u.test(String(person.role || "").trim());
-    const links = deduplicateSourceLinks([
-      ...(Array.isArray(person.sourceLinks) ? person.sourceLinks : []),
-      ...(Array.isArray(knowledge.sourceLinks) ? knowledge.sourceLinks : [])
-    ]);
-    return {
-      ...person,
-      role: genericRole || missing(person.role) ? knowledge.role : person.role,
-      bio: missing(person.bio) ? knowledge.bio : person.bio,
-      knownFor: missing(person.knownFor) ? knowledge.knownFor : person.knownFor,
-      sourceLinks: links
-    };
-  });
-}
-
-function deduplicateSourceLinks(links) {
-  const seen = new Set();
-  return links.filter((link) => {
-    if (!link?.url || seen.has(link.url)) return false;
-    seen.add(link.url);
-    return true;
-  });
 }
 
 function rankPersonEvidence(results) {
   const authorityScore = (value) => {
     try {
       const host = new URL(value).hostname.toLowerCase();
+      if (host === "baike.baidu.com" || host.endsWith(".baike.baidu.com")) return 7;
       if (/\.(?:gov|edu)\.cn$/u.test(host) || host.endsWith(".gov.cn")) return 6;
       if (/(?:thepaper\.cn|people\.com\.cn|xinhuanet\.com|jiemian\.com|cctv\.com)$/u.test(host)) return 5;
       if (/(?:china\.com\.cn|chinanews\.com|gmw\.cn|youth\.cn)$/u.test(host)) return 4;
@@ -888,79 +1114,6 @@ function rankPersonEvidence(results) {
     }
   };
   return [...results].sort((a, b) => authorityScore(b.url) - authorityScore(a.url));
-}
-
-async function fetchPublicKnowledgeProfile(name) {
-  const searchUrl = new URL("https://www.wikidata.org/w/api.php");
-  searchUrl.search = new URLSearchParams({
-    action: "wbsearchentities",
-    search: name,
-    language: "zh",
-    uselang: "zh",
-    type: "item",
-    limit: "5",
-    format: "json",
-    origin: "*"
-  });
-  const searchPayload = await fetch(searchUrl).then((response) => {
-    if (!response.ok) throw new Error(`Wikidata search HTTP ${response.status}`);
-    return response.json();
-  });
-  const normalizedName = String(name || "").replace(/\s+/gu, "");
-  const match = (Array.isArray(searchPayload.search) ? searchPayload.search : [])
-    .find((item) => String(item.label || "").replace(/\s+/gu, "") === normalizedName);
-  if (!match?.id) return null;
-
-  const entityUrl = new URL("https://www.wikidata.org/w/api.php");
-  entityUrl.search = new URLSearchParams({
-    action: "wbgetentities",
-    ids: match.id,
-    props: "descriptions|sitelinks",
-    languages: "zh|zh-hans",
-    sitefilter: "zhwiki",
-    format: "json",
-    origin: "*"
-  });
-  const entityPayload = await fetch(entityUrl).then((response) => response.json());
-  const entity = entityPayload.entities?.[match.id];
-  const description = entity?.descriptions?.zh?.value ||
-    entity?.descriptions?.["zh-hans"]?.value || match.description || "";
-  const wikiTitle = entity?.sitelinks?.zhwiki?.title || "";
-  let extract = "";
-  if (wikiTitle) {
-    const extractUrl = new URL("https://zh.wikipedia.org/w/api.php");
-    extractUrl.search = new URLSearchParams({
-      action: "query",
-      prop: "extracts",
-      exintro: "1",
-      explaintext: "1",
-      redirects: "1",
-      titles: wikiTitle,
-      format: "json",
-      origin: "*"
-    });
-    const extractPayload = await fetch(extractUrl).then((response) => response.json());
-    const page = Object.values(extractPayload.query?.pages || {})[0];
-    extract = String(page?.extract || "").replace(/\s+/gu, " ").trim();
-  }
-  const bio = extract.split(/(?<=[。！？])/u).slice(0, 2).join("").slice(0, 320) ||
-    description || "公共知识库暂无详细介绍。";
-  const sourceLinks = [
-    { title: `Wikidata：${name}`, url: `https://www.wikidata.org/wiki/${match.id}` }
-  ];
-  if (wikiTitle) {
-    sourceLinks.push({
-      title: `维基百科：${wikiTitle}`,
-      url: `https://zh.wikipedia.org/wiki/${encodeURIComponent(wikiTitle.replace(/ /gu, "_"))}`
-    });
-  }
-  return {
-    name,
-    role: description || "人物资料",
-    bio,
-    knownFor: "",
-    sourceLinks
-  };
 }
 
 function sanitizeUnsupportedContentMapYears(overview, evidenceText) {
@@ -1331,7 +1484,7 @@ function validateHighRiskFacts(person, candidates = []) {
   if (!linkedCandidates.length) {
     return {
       ...person,
-      role: "",
+      role: String(person.role || "").replace(/\*\*/gu, "").trim(),
       bio: "暂无足够可靠资料。",
       knownFor: "",
       sourceLinks: []
@@ -1418,15 +1571,17 @@ async function generateFollowup(payload = {}) {
   );
   const knowledgeBatches = await Promise.all(
     names.map(async (name) => {
-      const profile = await fetchPublicKnowledgeProfile(name).catch(() => null);
-      if (!profile) return [];
-      return profile.sourceLinks.map((source) => ({
-        title: source.title,
-        content: profile.bio,
-        url: source.url,
-        media: "公共知识库",
-        publishDate: ""
-      }));
+      const results = await searchWeb(`"${name}" 百度百科`, 8).catch(() => []);
+      return results
+        .filter((item) => {
+          try {
+            const host = new URL(item.url).hostname.toLowerCase();
+            return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
+          } catch {
+            return false;
+          }
+        })
+        .map((item) => ({ ...item, media: "百度百科" }));
     })
   );
   const candidates = [];
@@ -1501,7 +1656,7 @@ async function generateFollowup(payload = {}) {
       candidates
     }),
     temperature: 0.2,
-    maxTokens: 5000
+    maxTokens: 3200
     });
   } catch {
     return {
@@ -1702,14 +1857,50 @@ function followupCandidateScore(item) {
   );
 }
 
-async function searchWeb(query, count = 10) {
+async function searchWeb(query, count = 10, options = {}) {
+  const normalizedQuery = String(query || "").replace(/\s+/gu, " ").trim().slice(0, 70);
+  const normalizedCount = Math.min(20, Math.max(1, Number(count) || 10));
+  const domain = String(options.domain || "").trim().toLowerCase();
+  const cacheKey =
+    `webSearchCache:v2:${simpleTextHash(`${normalizedQuery}:${domain}`)}:${normalizedCount}`;
+  const cached = await chrome.storage.session.get(cacheKey).catch(() => ({}));
+  const cachedEntry = cached[cacheKey];
+  if (
+    cachedEntry?.query === normalizedQuery &&
+    cachedEntry?.domain === domain &&
+    Date.now() - Number(cachedEntry.cachedAt) < WEB_SEARCH_CACHE_TTL_MS &&
+    Array.isArray(cachedEntry.results)
+  ) {
+    return cachedEntry.results;
+  }
+  if (pendingWebSearches.has(cacheKey)) {
+    return pendingWebSearches.get(cacheKey);
+  }
+  const pending = performWebSearch(normalizedQuery, normalizedCount, domain)
+    .then(async (results) => {
+      await chrome.storage.session.set({
+        [cacheKey]: {
+          query: normalizedQuery,
+          domain,
+          cachedAt: Date.now(),
+          results
+        }
+      }).catch(() => {});
+      return results;
+    })
+    .finally(() => pendingWebSearches.delete(cacheKey));
+  pendingWebSearches.set(cacheKey, pending);
+  return pending;
+}
+
+async function performWebSearch(query, count, domain = "") {
   const searchUrl = new URL("/v1/web-search", AI_CONFIG.proxyUrl).href;
   let response;
   try {
     response = await proxyFetch(searchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: String(query).slice(0, 70), count })
+      body: JSON.stringify({ query, count, ...(domain ? { domain } : {}) })
     }, "web_search");
   } catch (error) {
     throw createError("WEB_SEARCH_NETWORK_ERROR", `联网检索失败：${error.message}`);
@@ -1730,7 +1921,21 @@ async function searchWeb(query, count = 10) {
       icon: normalizeExternalUrl(item.icon),
       publishDate: String(item.publish_date || "")
     }))
-    .filter((item) => item.url);
+    .filter((item) => item.url && !isDisallowedKnowledgeSource(item.url));
+}
+
+function isDisallowedKnowledgeSource(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return (
+      host === "wikidata.org" ||
+      host.endsWith(".wikidata.org") ||
+      host === "wikipedia.org" ||
+      host.endsWith(".wikipedia.org")
+    );
+  } catch {
+    return true;
+  }
 }
 
 function normalizeExternalUrl(value) {
@@ -1746,7 +1951,7 @@ function normalizeExternalUrl(value) {
 
 async function generateRemix(payload = {}) {
   const segments = requireTranscriptSegments(payload.segments);
-  const transcript = prepareTranscriptForAi(segments);
+  const transcript = prepareTranscriptForAi(segments, 90000);
   const allowedStyles = ["profile", "first_person", "insight_essay"];
   const requestedStyle = String(payload.style || "profile");
   const style = allowedStyles.includes(requestedStyle) ? requestedStyle : "profile";
@@ -1818,7 +2023,7 @@ async function generateRemix(payload = {}) {
         : []).slice(0, 2)
     }),
     temperature: 0.42,
-    maxTokens: 8000,
+    maxTokens: ({ short: 3200, medium: 5200, long: 7200 })[length] || 5200,
     validateResult: (value) => remixValidationIssues(
       value,
       style,
@@ -1902,7 +2107,7 @@ async function askPodcast(payload = {}) {
     throw createError("EMPTY_QUESTION", "请输入想向这期采访提出的问题。");
   }
   const segments = requireTranscriptSegments(payload.segments);
-  const transcript = prepareTranscriptForAi(segments);
+  const transcript = prepareTranscriptForAi(segments, 45000);
   const videoTitle = String(payload.video?.title || "");
   const normalizedQuestion = question.replace(/[*_#`]/gu, " ").replace(/\s+/gu, " ").trim();
   const webResults = selectPreferredResearchEvidence(deduplicateSearchResults(
@@ -1966,7 +2171,7 @@ async function askPodcast(payload = {}) {
       webResults
     }),
     temperature: 0.2,
-    maxTokens: 4200
+    maxTokens: 1800
   });
   const allowedUrls = new Set(webResults.map((item) => item.url));
   const transcriptTimes = transcript.map((segment) => Number(segment.from))
@@ -2013,7 +2218,7 @@ function researchSourceScore(result) {
   try {
     const host = new URL(result.url).hostname.toLocaleLowerCase();
     if (host.endsWith(".gov.cn") || /\.(?:gov|edu|ac)\.cn$/u.test(host)) return 10;
-    if (/(?:wikipedia\.org|wikidata\.org|britannica\.com)$/u.test(host)) return 9;
+    if (host === "baike.baidu.com" || host.endsWith(".baike.baidu.com")) return 9;
     if (/(?:imdb\.com|oscars\.org|criterion\.com|bfi\.org\.uk|loc\.gov)$/u.test(host)) return 8;
     if (/(?:people\.com\.cn|xinhuanet\.com|cctv\.com|chinanews\.com|thepaper\.cn|caixin\.com|bjnews\.com\.cn|infzm\.com|gmw\.cn|cnr\.cn)$/u.test(host)) return 8;
     if (/(?:bbc\.com|reuters\.com|apnews\.com|nytimes\.com|theguardian\.com|ft\.com|economist\.com)$/u.test(host)) return 8;
@@ -2132,7 +2337,7 @@ function prepareTranscriptForAi(segments, maxCharacters = 220000) {
   return sampled;
 }
 
-function prepareTranscriptForHighlights(segments, maxCharacters = 90000) {
+function prepareTranscriptForHighlights(segments, maxCharacters = 65000) {
   const normalized = segments.map(toAiSegment);
   const characterCost = (segment) =>
     String(segment.text || "").length + 60;
@@ -2243,13 +2448,18 @@ async function callAiJson({
 
   payload = await requestAiProxyCompletion({
     messages: [
-      ...messages,
-      { role: "assistant", content: outputText },
+      {
+        role: "system",
+        content:
+          "你是 JSON 结果修复器。只根据校验问题修复候选结果，保留其中正确内容，" +
+          `并返回符合此 JSON Schema 的完整对象：${JSON.stringify(schema)}`
+      },
       {
         role: "user",
         content:
-          `上一条回复不符合要求：${validationIssues.join("；")}。` +
-          "请重新完成原任务，补齐所有必需内容，只输出 JSON 对象；不要复述、解释或道歉。"
+          `校验问题：${validationIssues.join("；")}\n` +
+          `待修复结果：${outputText}\n` +
+          "只输出修复后的 JSON 对象，不要解释或道歉。"
       }
     ],
     temperature: 0,

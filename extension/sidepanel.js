@@ -15,6 +15,13 @@ const elements = {
   toolbar: document.querySelector("#toolbar"),
   searchInput: document.querySelector("#search-input"),
   copyButton: document.querySelector("#copy-button"),
+  transcriptCorrection: document.querySelector("#transcript-correction"),
+  transcriptCorrectionForm: document.querySelector("#transcript-correction-form"),
+  transcriptWrongName: document.querySelector("#transcript-wrong-name"),
+  transcriptCorrectName: document.querySelector("#transcript-correct-name"),
+  transcriptCorrectionButton: document.querySelector("#transcript-correction-button"),
+  transcriptCorrectionStatus: document.querySelector("#transcript-correction-status"),
+  transcriptCorrectionList: document.querySelector("#transcript-correction-list"),
   backToTopButton: document.querySelector("#back-to-top-button"),
   aiSettings: document.querySelector("#ai-settings"),
   aiConfigState: document.querySelector("#ai-config-state"),
@@ -36,6 +43,10 @@ const elements = {
   overviewCover: document.querySelector("#overview-cover"),
   overviewInterviewers: document.querySelector("#overview-interviewers"),
   overviewInterviewees: document.querySelector("#overview-interviewees"),
+  overviewCorrectionForm: document.querySelector("#overview-correction-form"),
+  overviewCorrectionInput: document.querySelector("#overview-correction-input"),
+  overviewCorrectionButton: document.querySelector("#overview-correction-button"),
+  overviewCorrectionStatus: document.querySelector("#overview-correction-status"),
   overviewChapters: document.querySelector("#overview-chapters"),
   overviewLifePaths: document.querySelector("#overview-life-paths"),
   overviewThoughtFragments: document.querySelector("#overview-thought-fragments"),
@@ -96,6 +107,7 @@ const elements = {
 
 let transcriptSegments = [];
 let rawSubtitleSegments = [];
+let transcriptCorrections = [];
 let renderedSegments = [];
 let activeSegmentIndex = -1;
 let currentPageTabId = null;
@@ -121,12 +133,14 @@ const AI_CONSENT_VERSION = 1;
 elements.reloadButton.addEventListener("click", loadTranscript);
 elements.searchInput.addEventListener("input", filterTranscript);
 elements.copyButton.addEventListener("click", copyTranscript);
+elements.transcriptCorrectionForm.addEventListener("submit", saveTranscriptCorrection);
 elements.backToTopButton.addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 window.addEventListener("scroll", updateBackToTopButton, { passive: true });
 elements.addNoteButton.addEventListener("click", openNoteDialog);
 elements.generateOverviewButton.addEventListener("click", generateOverview);
+elements.overviewCorrectionForm.addEventListener("submit", correctOverview);
 elements.generateClipsButton.addEventListener("click", generateClipCandidates);
 for (const button of elements.clipFilterButtons) {
   button.addEventListener("click", () => setClipFilter(button.dataset.clipFilter));
@@ -278,7 +292,9 @@ async function clearCurrentVideoAiData() {
   const videoMarker = `:${currentVideo.bvid || "unknown"}:${currentVideo.cid || "unknown"}`;
   const stored = await chrome.storage.local.get(null);
   const keys = Object.keys(stored).filter((key) =>
-    key.includes(videoMarker) && !key.startsWith("timelineNotes:")
+    key.includes(videoMarker) &&
+    !key.startsWith("timelineNotes:") &&
+    !key.startsWith("transcriptNameCorrectionsV1:")
   );
   if (keys.length) await chrome.storage.local.remove(keys);
   currentOverview = null;
@@ -380,9 +396,8 @@ async function loadTranscript() {
   currentPageTabId = response.page.tabId;
   currentVideo = response.video;
   rawSubtitleSegments = response.segments;
-  transcriptSegments = TranscriptUtils.mergeInterviewTurns(
-    response.segments
-  );
+  await loadTranscriptCorrections();
+  const appliedCorrections = rebuildCorrectedTranscript();
   elements.pageSummary.textContent =
     response.video.pageCount > 1
       ? `第 ${response.video.page}/${response.video.pageCount} P`
@@ -393,10 +408,18 @@ async function loadTranscript() {
     `${transcriptSegments.length} 段 · ${rawSubtitleSegments.length} 句`;
   elements.videoInfo.hidden = false;
   elements.toolbar.hidden = false;
+  elements.transcriptCorrection.hidden = false;
   elements.workspaceTabs.hidden = false;
   updateAiConfigState();
 
   renderTranscript(transcriptSegments);
+  renderTranscriptCorrections();
+  if (transcriptCorrections.length) {
+    showTranscriptCorrectionStatus(
+      `已应用 ${transcriptCorrections.length} 条修正，共替换 ${appliedCorrections} 处。`,
+      false
+    );
+  }
   await loadWorkspaceData();
   await syncPlaybackState();
   elements.status.hidden = true;
@@ -408,6 +431,139 @@ async function loadTranscript() {
       : "AI API 代理未连接，请先启动或部署代理。",
     !aiAvailable
   );
+}
+
+async function loadTranscriptCorrections() {
+  const key = videoStorageKey("transcriptNameCorrectionsV1");
+  const stored = await chrome.storage.local.get(key);
+  transcriptCorrections = (Array.isArray(stored[key]) ? stored[key] : [])
+    .map((correction) => ({
+      from: String(correction?.from || "").trim(),
+      to: String(correction?.to || "").trim()
+    }))
+    .filter((correction) =>
+      correction.from && correction.to && correction.from !== correction.to
+    );
+}
+
+function rebuildCorrectedTranscript() {
+  const corrected = TranscriptUtils.applyTranscriptCorrections(
+    rawSubtitleSegments,
+    transcriptCorrections
+  );
+  transcriptSegments = TranscriptUtils.mergeInterviewTurns(corrected.segments);
+  chrome.runtime.sendMessage({
+    type: "SET_CORRECTED_TRANSCRIPT",
+    payload: { video: currentVideo, segments: corrected.segments }
+  }).catch(() => {});
+  return corrected.replacementCount;
+}
+
+async function saveTranscriptCorrection(event) {
+  event.preventDefault();
+  const from = elements.transcriptWrongName.value.replace(/\s+/gu, "").trim();
+  const to = elements.transcriptCorrectName.value.replace(/\s+/gu, "").trim();
+  if (from.length < 2 || to.length < 2) {
+    showTranscriptCorrectionStatus("姓名至少需要 2 个字符。", true);
+    return;
+  }
+  if (from === to) {
+    showTranscriptCorrectionStatus("错误姓名和正确姓名不能相同。", true);
+    return;
+  }
+  const currentTranscript = TranscriptUtils.applyTranscriptCorrections(
+    rawSubtitleSegments,
+    transcriptCorrections
+  ).segments;
+  const occurrences = currentTranscript.reduce((count, segment) =>
+    count + (String(segment.text || "").split(from).length - 1), 0);
+  if (!occurrences) {
+    showTranscriptCorrectionStatus(`当前稿本中没有找到“${from}”。`, true);
+    return;
+  }
+
+  transcriptCorrections = [
+    ...transcriptCorrections.filter((correction) => correction.from !== from),
+    { from, to }
+  ];
+  await chrome.storage.local.set({
+    [videoStorageKey("transcriptNameCorrectionsV1")]: transcriptCorrections
+  });
+  const replacementCount = rebuildCorrectedTranscript();
+  renderTranscript(transcriptSegments);
+  renderTranscriptCorrections();
+  elements.transcriptWrongName.value = "";
+  elements.transcriptCorrectName.value = "";
+  await invalidateGeneratedContentAfterTranscriptEdit();
+  showTranscriptCorrectionStatus(
+    `已将“${from}”改为“${to}”，当前稿本共替换 ${replacementCount} 处；请重新生成需要的 AI 内容。`,
+    false
+  );
+}
+
+function renderTranscriptCorrections() {
+  elements.transcriptCorrectionList.replaceChildren();
+  for (const [index, correction] of transcriptCorrections.entries()) {
+    const item = document.createElement("div");
+    item.className = "transcript-correction-item";
+    const text = document.createElement("span");
+    text.textContent = `${correction.from} → ${correction.to}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "撤销";
+    remove.addEventListener("click", () => removeTranscriptCorrection(index));
+    item.append(text, remove);
+    elements.transcriptCorrectionList.append(item);
+  }
+}
+
+async function removeTranscriptCorrection(index) {
+  const removed = transcriptCorrections[index];
+  if (!removed) return;
+  transcriptCorrections.splice(index, 1);
+  await chrome.storage.local.set({
+    [videoStorageKey("transcriptNameCorrectionsV1")]: transcriptCorrections
+  });
+  const replacementCount = rebuildCorrectedTranscript();
+  renderTranscript(transcriptSegments);
+  renderTranscriptCorrections();
+  await invalidateGeneratedContentAfterTranscriptEdit();
+  showTranscriptCorrectionStatus(
+    `已撤销“${removed.from} → ${removed.to}”；当前仍应用 ${replacementCount} 处替换。`,
+    false
+  );
+}
+
+function showTranscriptCorrectionStatus(message, isError) {
+  elements.transcriptCorrectionStatus.textContent = message;
+  elements.transcriptCorrectionStatus.classList.toggle("error", isError);
+  elements.transcriptCorrectionStatus.hidden = false;
+}
+
+async function invalidateGeneratedContentAfterTranscriptEdit() {
+  const marker = `:${currentVideo?.bvid || "unknown"}:${currentVideo?.cid || "unknown"}`;
+  const local = await chrome.storage.local.get(null);
+  const localKeys = Object.keys(local).filter((key) =>
+    key.includes(marker) &&
+    !key.startsWith("timelineNotes:") &&
+    !key.startsWith("transcriptNameCorrectionsV1:")
+  );
+  if (localKeys.length) await chrome.storage.local.remove(localKeys);
+  const session = await chrome.storage.session.get(null);
+  const sessionKeys = Object.keys(session).filter((key) =>
+    key.includes(marker) && key.startsWith("segmentInsight:")
+  );
+  if (sessionKeys.length) await chrome.storage.session.remove(sessionKeys);
+  currentOverview = null;
+  currentClipRadar = null;
+  currentRemix = null;
+  elements.overviewOutput.hidden = true;
+  elements.clipsOutput.hidden = true;
+  elements.remixOutput.hidden = true;
+  elements.followupOutput.hidden = true;
+  elements.generateOverviewButton.textContent = "生成内容地图";
+  elements.generateClipsButton.textContent = "分析内容价值";
+  elements.generateFollowupButton.textContent = "生成延伸探索";
 }
 
 function renderTranscript(segments) {
@@ -473,14 +629,14 @@ function transcriptForAi() {
 }
 
 async function loadWorkspaceData() {
-  const overviewKey = videoStorageKey("contentMapV6");
+  const overviewKey = videoStorageKey("contentMapV8");
   const notesKey = videoStorageKey("timelineNotes");
   const remixKey = videoStorageKey(
     "remixV4",
     `${elements.remixStyle.value}:${elements.remixLength.value}`
   );
   const followupKey = videoStorageKey("followupV3");
-  const clipsKey = videoStorageKey("contentValueRadarV5");
+  const clipsKey = videoStorageKey("contentValueRadarV8");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
     overviewKey, notesKey, remixKey, followupKey, clipsKey, clipFavoritesKey
@@ -527,7 +683,7 @@ async function generateOverview() {
     }
     renderOverview(response.overview);
     await chrome.storage.local.set({
-      [videoStorageKey("contentMapV6")]: response.overview
+      [videoStorageKey("contentMapV8")]: response.overview
     });
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
@@ -535,6 +691,59 @@ async function generateOverview() {
     elements.overviewError.hidden = false;
   } finally {
     setModuleBusy("overview", false);
+  }
+}
+
+async function correctOverview(event) {
+  event.preventDefault();
+  if (!currentVideo || !currentOverview) return;
+  if (!(await ensureAiConsent())) return;
+  const feedback = elements.overviewCorrectionInput.value.trim();
+  if (feedback.length < 4) {
+    elements.overviewCorrectionStatus.textContent =
+      "请更具体地说明需要核实的问题。";
+    elements.overviewCorrectionStatus.classList.add("error");
+    elements.overviewCorrectionStatus.hidden = false;
+    return;
+  }
+  elements.overviewCorrectionButton.disabled = true;
+  elements.overviewCorrectionButton.textContent = "正在核实…";
+  elements.overviewCorrectionStatus.textContent =
+    "AI 正在对照视频标题、原声文稿和联网证据判断反馈是否成立。";
+  elements.overviewCorrectionStatus.classList.remove("error");
+  elements.overviewCorrectionStatus.hidden = false;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "CORRECT_OVERVIEW",
+      payload: {
+        video: currentVideo,
+        segments: transcriptForAi(),
+        overview: currentOverview,
+        feedback
+      }
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error?.message || "AI 纠错失败。");
+    }
+    if (response.corrected !== true) {
+      elements.overviewCorrectionStatus.textContent =
+        `暂未修改：${response.explanation || "没有足够证据支持这项反馈。"}`;
+      return;
+    }
+    renderOverview(response.overview);
+    await chrome.storage.local.set({
+      [videoStorageKey("contentMapV8")]: response.overview
+    });
+    elements.overviewCorrectionInput.value = "";
+    elements.overviewCorrectionStatus.textContent =
+      `已核实并修正：${response.explanation || "问题成立。"}`;
+  } catch (error) {
+    elements.overviewCorrectionStatus.textContent = error.message;
+    elements.overviewCorrectionStatus.classList.add("error");
+  } finally {
+    elements.overviewCorrectionButton.disabled = false;
+    elements.overviewCorrectionButton.textContent = "核实并修正";
+    elements.overviewCorrectionStatus.hidden = false;
   }
 }
 
@@ -746,7 +955,7 @@ async function generateClipCandidates() {
     }
     renderClipCandidates(response.clips);
     await chrome.storage.local.set({
-      [videoStorageKey("contentValueRadarV5")]: response.clips
+      [videoStorageKey("contentValueRadarV8")]: response.clips
     });
     elements.generateClipsButton.textContent = "重新分析内容价值";
   } catch (error) {
@@ -765,7 +974,9 @@ function isRenderableClipRadar(result) {
     Array.isArray(result.clips) &&
     result.clips.filter((clip) =>
       Number(clip?.to) > Number(clip?.from) + 3 &&
-      String(clip?.title || "").trim()
+      String(clip?.title || "").trim() &&
+      Array.isArray(clip?.bgmSuggestions) &&
+      clip.bgmSuggestions.length === 3
     ).length >= 5
   );
 }
@@ -859,7 +1070,7 @@ function createClipCard(clip) {
     createClipScoreAnalysis(clip),
     createScenarioAnalysis(clip),
     clipPlanRow("话题", (clip.topics || []).map((topic) => `#${topic}`).join(" ")),
-    clipPlanRow("BGM", clip.bgmSuggestion)
+    createBgmRecommendations(clip)
   );
   details.append(summary, plan);
   card.append(top, title, range, quote, reason);
@@ -990,6 +1201,41 @@ function clipPlanRow(label, value) {
   return row;
 }
 
+function createBgmRecommendations(clip) {
+  const section = document.createElement("section");
+  section.className = "clip-bgm-recommendations";
+  const heading = document.createElement("h4");
+  heading.textContent = "BGM 歌曲推荐";
+  section.append(heading);
+  for (const bgm of Array.isArray(clip.bgmSuggestions)
+    ? clip.bgmSuggestions
+    : []) {
+    const item = document.createElement("div");
+    item.className = "clip-bgm-item";
+    const copy = document.createElement("div");
+    copy.className = "clip-bgm-copy";
+    const title = document.createElement("strong");
+    title.textContent = `${bgm.title} — ${bgm.artist}`;
+    const detail = document.createElement("p");
+    detail.textContent = bgm.reason || "";
+    copy.append(title, detail);
+    const link = document.createElement("a");
+    link.className = "clip-bgm-link";
+    link.href = douyinBgmSearchUrl(bgm);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "去抖音搜索 ↗";
+    link.title = `在抖音搜索 ${bgm.title} ${bgm.artist}`;
+    item.append(copy, link);
+    section.append(item);
+  }
+  return section;
+}
+
+function douyinBgmSearchUrl(bgm) {
+  return TranscriptUtils.buildDouyinSearchUrl(bgm?.title, bgm?.artist);
+}
+
 function formatClipPlan(clip) {
   const portraitLabels = {
     emotionalIntensity: "情绪浓度",
@@ -1004,6 +1250,10 @@ function formatClipPlan(clip) {
   const scenarioText = (clip.scenarios || []).map((scenario) =>
     `${scenario.type}（${scenario.fit}）：${scenario.title}；${scenario.advice}`
   ).join("\n");
+  const bgmText = (clip.bgmSuggestions || []).map((bgm, index) =>
+    `BGM 歌曲 ${index + 1}：${bgm.title} — ${bgm.artist}；${bgm.reason}\n` +
+    `抖音搜索：${douyinBgmSearchUrl(bgm)}`
+  ).join("\n");
   return [
     clip.title,
     `区间：${formatTime(clip.from)} – ${formatTime(clip.to)}`,
@@ -1014,7 +1264,7 @@ function formatClipPlan(clip) {
     `内容价值画像：${clip.valuePortrait || ""}`,
     scenarioText,
     `话题：${(clip.topics || []).map((topic) => `#${topic}`).join(" ")}`,
-    `BGM：${clip.bgmSuggestion}`
+    bgmText
   ].filter(Boolean).join("\n");
 }
 
@@ -1817,6 +2067,7 @@ function errorTitle(code) {
 function resetTranscript() {
   transcriptSegments = [];
   rawSubtitleSegments = [];
+  transcriptCorrections = [];
   renderedSegments = [];
   activeSegmentIndex = -1;
   currentVideo = null;
@@ -1830,6 +2081,9 @@ function resetTranscript() {
   elements.transcript.replaceChildren();
   elements.videoInfo.hidden = true;
   elements.toolbar.hidden = true;
+  elements.transcriptCorrection.hidden = true;
+  elements.transcriptCorrectionList.replaceChildren();
+  elements.transcriptCorrectionStatus.hidden = true;
   elements.workspaceTabs.hidden = true;
   elements.overviewOutput.hidden = true;
   elements.clipsOutput.hidden = true;

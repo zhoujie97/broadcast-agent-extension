@@ -12,6 +12,7 @@ const requiredFiles = [
   "sidepanel.css",
   "sidepanel.js",
   "transcript-utils.js",
+  "person-utils.js",
   "privacy.html",
   "icons/icon16.png",
   "icons/icon32.png",
@@ -31,6 +32,9 @@ if (!manifest.icons?.["128"]) throw new Error("缺少商店图标");
 if (manifest.name.includes("验证版")) throw new Error("生产包名称仍包含“验证版”");
 
 const files = await listFiles(extensionDir);
+if (files.some((file) => path.basename(file) === ".DS_Store")) {
+  throw new Error("生产包不应包含 .DS_Store");
+}
 for (const file of files) {
   if (!/\.(?:js|json|html|css|md)$/u.test(file)) continue;
   const text = await fs.readFile(file, "utf8");

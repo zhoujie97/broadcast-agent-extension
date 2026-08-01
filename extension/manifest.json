@@ -15,8 +15,6 @@
     "https://www.bilibili.com/*",
     "https://api.bilibili.com/*",
     "https://*.hdslb.com/*",
-    "https://www.wikidata.org/*",
-    "https://zh.wikipedia.org/*",
     "http://127.0.0.1:8787/*"
   ],
   "background": {
