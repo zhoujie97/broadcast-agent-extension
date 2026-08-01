@@ -638,7 +638,7 @@ function transcriptForAi() {
 async function loadWorkspaceData() {
   const overviewKey = videoStorageKey("contentMapV8");
   const notesKey = videoStorageKey("timelineNotes");
-  const followupKey = videoStorageKey("followupV4");
+  const followupKey = videoStorageKey("followupV5");
   const clipsKey = videoStorageKey("contentValueRadarV8");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
@@ -1416,7 +1416,7 @@ async function generateFollowup() {
     }
     renderFollowup(response.followup);
     await chrome.storage.local.set({
-      [videoStorageKey("followupV4")]: response.followup
+      [videoStorageKey("followupV5")]: response.followup
     });
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
   } catch (error) {

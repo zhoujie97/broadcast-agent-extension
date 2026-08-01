@@ -63,7 +63,8 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("remixV3:") ||
       key.startsWith("remixV4:") ||
       key.startsWith("followupV2:") ||
-      key.startsWith("followupV3:")
+      key.startsWith("followupV3:") ||
+      key.startsWith("followupV4:")
     );
   const sessionKeys = Object.keys(sessionValues)
     .filter((key) => key.startsWith("speakerLabels:"));
