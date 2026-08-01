@@ -25,6 +25,7 @@ await fs.rm(archivePath, { force: true });
 await fs.mkdir(path.dirname(outputDir), { recursive: true });
 await fs.cp(sourceDir, outputDir, { recursive: true });
 await fs.rm(path.join(outputDir, "README.md"), { force: true });
+await fs.rm(path.join(outputDir, ".DS_Store"), { force: true });
 
 const backgroundPath = path.join(outputDir, "background.js");
 let background = await fs.readFile(backgroundPath, "utf8");

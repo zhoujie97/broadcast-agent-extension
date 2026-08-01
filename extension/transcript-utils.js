@@ -173,7 +173,43 @@
       .trim();
   }
 
-  const api = { mergeInterviewTurns };
+  function buildDouyinSearchUrl(title, artist) {
+    const query = `${title || ""} ${artist || ""} 歌曲 BGM`
+      .replace(/\s+/gu, " ")
+      .trim();
+    return `https://www.douyin.com/search/${encodeURIComponent(query)}`;
+  }
+
+  function applyTranscriptCorrections(segments, corrections) {
+    const normalizedCorrections = (Array.isArray(corrections) ? corrections : [])
+      .map((correction) => ({
+        from: String(correction?.from || "").trim(),
+        to: String(correction?.to || "").trim()
+      }))
+      .filter((correction) =>
+        correction.from &&
+        correction.to &&
+        correction.from !== correction.to
+      );
+    let replacementCount = 0;
+    const correctedSegments = (Array.isArray(segments) ? segments : []).map((segment) => {
+      let text = String(segment?.text || "");
+      for (const correction of normalizedCorrections) {
+        const occurrences = text.split(correction.from).length - 1;
+        if (!occurrences) continue;
+        replacementCount += occurrences;
+        text = text.split(correction.from).join(correction.to);
+      }
+      return { ...segment, text };
+    });
+    return { segments: correctedSegments, replacementCount };
+  }
+
+  const api = {
+    mergeInterviewTurns,
+    buildDouyinSearchUrl,
+    applyTranscriptCorrections
+  };
   globalScope.TranscriptUtils = api;
 
   if (typeof module !== "undefined" && module.exports) {

@@ -64,11 +64,21 @@ const GLOBAL_DAILY_UNITS = clamp(
   1_000_000,
   5000
 );
+const allowedOriginRules = String(
+  process.env.ALLOWED_EXTENSION_ORIGINS || ""
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const allowedOrigins = new Set(
-  String(process.env.ALLOWED_EXTENSION_ORIGINS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
+  allowedOriginRules.filter((value) => !value.endsWith("://*"))
+);
+const allowedExtensionSchemes = new Set(
+  allowedOriginRules
+    .filter((value) =>
+      ["chrome-extension://*", "moz-extension://*"].includes(value)
+    )
+    .map((value) => value.slice(0, -3))
 );
 const minuteUsage = new Map();
 const dailyUsage = new Map();
@@ -164,7 +174,8 @@ export async function handleProxyRequest(request, response) {
       }
       const upstream = await requestWebSearch({
         query: searchQuery,
-        count: clamp(Number(input.count), 1, 20, 10)
+        count: clamp(Number(input.count), 1, 20, 10),
+        domain: normalizeSearchDomain(input.domain)
       });
       return relayUpstream(response, upstream);
     }
@@ -219,7 +230,7 @@ function assertProductionConfiguration() {
       "生产环境必须配置至少 24 字符的 SESSION_SIGNING_SECRET。"
     );
   }
-  if (!IS_LOCAL && allowedOrigins.size === 0) {
+  if (!IS_LOCAL && allowedOriginRules.length === 0) {
     throw httpError(
       503,
       "PROXY_NOT_CONFIGURED",
@@ -274,7 +285,7 @@ function isWebSearchConfigured() {
   return WEB_SEARCH_PROVIDER === "zhipu" && Boolean(ZHIPU_API_KEY);
 }
 
-async function requestWebSearch({ query, count }) {
+async function requestWebSearch({ query, count, domain = "" }) {
   if (WEB_SEARCH_PROVIDER !== "zhipu") {
     throw httpError(
       503,
@@ -300,10 +311,16 @@ async function requestWebSearch({ query, count }) {
       search_engine: "search_std",
       search_intent: false,
       count,
+      ...(domain ? { search_domain_filter: domain } : {}),
       search_recency_filter: "noLimit",
-      content_size: "high"
+      content_size: "medium"
     })
   });
+}
+
+export function normalizeSearchDomain(value) {
+  const domain = String(value || "").trim().toLowerCase();
+  return /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/u.test(domain) ? domain : "";
 }
 
 async function fetchWithTimeout(url, options) {
@@ -331,14 +348,25 @@ async function relayUpstream(response, upstream) {
 }
 
 function resolveCorsOrigin(origin) {
-  if (allowedOrigins.has(origin)) return origin;
+  return isOriginAllowed(origin) ? origin : "";
+}
+
+export function isOriginAllowed(origin, {
+  exactOrigins = allowedOrigins,
+  extensionSchemes = allowedExtensionSchemes,
+  allowAnyExtension = IS_LOCAL
+} = {}) {
+  if (exactOrigins.has(origin)) return true;
+  const extensionOrigin = origin.match(
+    /^(chrome-extension|moz-extension):\/\/[a-z0-9-]+$/iu
+  );
   if (
-    IS_LOCAL &&
-    /^(chrome-extension|moz-extension):\/\/[a-z0-9-]+$/iu.test(origin)
+    extensionOrigin &&
+    extensionSchemes.has(extensionOrigin[1].toLowerCase())
   ) {
-    return origin;
+    return true;
   }
-  return "";
+  return Boolean(allowAnyExtension && extensionOrigin);
 }
 
 function setCorsHeaders(response, origin) {
@@ -518,6 +546,9 @@ function featureUnits(feature) {
     podcast_answer: 1,
     ai_followup: 2,
     content_map: 3,
+    content_map_correction: 3,
+    person_context_verification: 2,
+    interview_people: 2,
     clip_candidates: 3,
     remix_article: 5,
     web_search: 1

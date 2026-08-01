@@ -74,6 +74,26 @@
           </label>
           <button id="copy-button" type="button">复制全文</button>
         </section>
+        <details id="transcript-correction" class="transcript-correction" hidden>
+          <summary>修正稿本人名</summary>
+          <form id="transcript-correction-form">
+            <div class="transcript-correction-fields">
+              <label>
+                <span>错误姓名</span>
+                <input id="transcript-wrong-name" type="text" minlength="2" maxlength="20" placeholder="例如：叶利静" required>
+              </label>
+              <span class="transcript-correction-arrow" aria-hidden="true">→</span>
+              <label>
+                <span>正确姓名</span>
+                <input id="transcript-correct-name" type="text" minlength="2" maxlength="20" placeholder="例如：易立竞" required>
+              </label>
+            </div>
+            <button id="transcript-correction-button" type="submit">替换全文并保存</button>
+            <p class="transcript-correction-help">修正只保存在当前视频；内容地图、高光切片、问答和文章将使用修正后的稿本。</p>
+            <p id="transcript-correction-status" class="transcript-correction-status" aria-live="polite" hidden></p>
+            <div id="transcript-correction-list" class="transcript-correction-list"></div>
+          </form>
+        </details>
         <section id="transcript" class="transcript" aria-label="视频智能稿本"></section>
         <button id="back-to-top-button" class="back-to-top-button" type="button" hidden aria-label="返回顶部">↑ 返回顶部</button>
       </section>
@@ -93,12 +113,18 @@
           </section>
           <section>
             <h3 class="section-title">采访人物</h3>
-            <p class="fact-check-note">人物资料由联网搜索辅助核实，并附可点击来源；来源不足或存在冲突的事实将省略。</p>
+            <p class="fact-check-note">人物资料优先使用百度百科，并结合标题、字幕和搜索证据核实；来源不足或存在冲突的事实将省略。</p>
             <img id="overview-cover" class="overview-cover" alt="本期采访画面，来自 Bilibili 视频封面" hidden>
             <p class="people-group-title">采访者</p>
             <div id="overview-interviewers" class="people-list"></div>
             <p class="people-group-title">被采访者</p>
             <div id="overview-interviewees" class="people-list"></div>
+            <form id="overview-correction-form" class="overview-correction-form">
+              <label for="overview-correction-input">发现内容有误？告诉 AI 需要核实的问题</label>
+              <textarea id="overview-correction-input" rows="3" maxlength="1000" placeholder="例如：张若楠应为章若楠；金靖不是围棋手，请结合本期视频重新核实人物身份。" required></textarea>
+              <button id="overview-correction-button" type="submit">核实并修正</button>
+              <p id="overview-correction-status" class="overview-correction-status" aria-live="polite" hidden></p>
+            </form>
           </section>
           <section>
             <h3 class="section-title">主题章节</h3>
@@ -258,7 +284,7 @@
         <button id="close-ai-consent-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="consent-copy">
-        <p>为了生成内容地图、高光切片、内容重构、问答和延伸探索，插件会把当前视频标题、相关字幕片段和你的问题发送到我们的 HTTPS AI 代理，再由代理调用当前配置的 AI 模型。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
+        <p>为了生成内容地图、高光切片、内容重构、问答、纠错和延伸探索，插件会把当前视频标题、相关字幕片段以及你的问题或纠错反馈发送到我们的 HTTPS AI 代理，再由代理调用当前配置的 AI 模型。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
         <p>AI 结果和知识笔记默认保存在本机浏览器中。你可以随时撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
         <p><a href="privacy.html" target="_blank" rel="noreferrer">查看完整隐私说明</a></p>
       </div>

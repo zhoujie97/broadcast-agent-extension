@@ -36,7 +36,7 @@ Bilibili 页面
    - `DEEPSEEK_API_KEY`：DeepSeek 正式密钥（使用 DeepSeek 对话模型时必填）。
    - `ZHIPU_API_KEY`：智谱正式密钥（使用智谱对话模型或保留智谱联网搜索时必填）。
    - `SESSION_SIGNING_SECRET`：至少 24 字符的随机字符串。
-   - `ALLOWED_EXTENSION_ORIGINS`：例如 `chrome-extension://babomghgdgifmepkmndbepfidadbhffo`。多个 Origin 用英文逗号分隔。
+   - `ALLOWED_EXTENSION_ORIGINS`：正式发布优先填写固定 Origin，例如 `chrome-extension://babomghgdgifmepkmndbepfidadbhffo`。多个 Origin 用英文逗号分隔。侧载测试阶段可暂时填写 `chrome-extension://*`，它只匹配格式合法的 Chrome/Edge 扩展 Origin；拿到正式扩展 ID 后应改回固定值。
    - `AI_PROVIDER`：推荐 `deepseek`
    - `AI_MODEL`：推荐 `deepseek-v4-flash`
    - `AI_FALLBACK_MODEL`：可留空。
@@ -101,6 +101,7 @@ dist/broadcast-agent-extension.zip
 - 未授权时不发送字幕；授权后内容地图、高光切片、内容重构和延伸探索可用。
 - 时间戳跳转、视频内提问、知识笔记和清除数据可用。
 - 代理的 401、403、429、超时错误都能显示为可理解提示。
+- 如果侧载包的扩展 ID 尚未固定，可用 `chrome-extension://*` 验收；发布前改回商店安装包的固定 Origin。
 - 服务日志不包含字幕正文、问题正文、回答正文或密钥。
 - 暂停 AI 服务后，字幕阅读和手工笔记仍可使用。
 
