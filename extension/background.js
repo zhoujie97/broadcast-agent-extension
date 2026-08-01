@@ -1659,7 +1659,7 @@ async function generateFollowup(payload = {}) {
   const topics = collectFollowupTopics(overview);
   const title = String(payload.video?.title || "").slice(0, 48);
   const subjects = names;
-  const candidateGroups = await Promise.all(subjects.map((guestName) =>
+  const candidateGroups = (await Promise.all(subjects.map((guestName) =>
     collectFollowupCandidatesForGuest({
       guestName,
       topics,
@@ -1671,7 +1671,9 @@ async function generateFollowup(payload = {}) {
           cleanFollowupSearchTerm(person?.name) === guestName
         )
     })
-  ));
+  ))).map((group, index) =>
+    ensureFollowupCategoryCoverage(group, subjects[index])
+  );
   const missingGuests = subjects.filter((_name, index) => !candidateGroups[index].length);
   if (missingGuests.length) {
     throw createError(
@@ -1707,6 +1709,14 @@ async function generateFollowup(payload = {}) {
   }
 
   const fallbackItems = candidates.map(followupItemFromCandidate);
+  const aiCandidates = candidates.filter((item) => !item.searchFallback);
+  if (!aiCandidates.length) {
+    return {
+      ok: true,
+      followup: buildCandidateFollowup(candidates, subjects, topics),
+      ...(identifiedPeople ? { people: identifiedPeople } : {})
+    };
+  }
   let result;
   try {
     result = await callAiJson({
@@ -1748,7 +1758,7 @@ async function generateFollowup(payload = {}) {
       videoTitle: title,
       interviewees: subjects,
       keyTopics: topics,
-      candidates
+      candidates: aiCandidates
     }),
     temperature: 0.2,
     maxTokens: 4200
@@ -1760,7 +1770,7 @@ async function generateFollowup(payload = {}) {
       ...(identifiedPeople ? { people: identifiedPeople } : {})
     };
   }
-  const allowedPairs = new Set(candidates.map((item) =>
+  const allowedPairs = new Set(aiCandidates.map((item) =>
     `${item.guestName}\n${item.url}`
   ));
   const selectedItems = (Array.isArray(result.items) ? result.items : [])
@@ -1793,6 +1803,9 @@ async function generateFollowup(payload = {}) {
   }
   result.intro = String(result.intro ||
     `已分别整理${subjects.join("、")}的延伸资料。`);
+  if (candidates.some((item) => item.searchFallback)) {
+    result.intro += " 部分分类暂未找到足够可靠的具体链接，已提供对应平台的搜索入口。";
+  }
   result.topics = deduplicateStrings([
     ...subjects,
     ...(Array.isArray(result.topics) ? result.topics : []),
@@ -1821,10 +1834,12 @@ async function collectFollowupCandidatesForGuest({
     `${guestName} 人物专访`,
     topics[0] ? `${guestName} ${topics[0]}` : ""
   ]).filter(Boolean).map((query) => query.slice(0, 70));
-  const [videoBatches, webBatches, knowledgeResults] = await Promise.all([
+  const [videoBatches, videoWebResults, webBatches, knowledgeResults] = await Promise.all([
     Promise.all(biliQueries.map((query) =>
       searchBilibiliVideos(query, 8).catch(() => [])
     )),
+    searchWeb(`${guestName} 访谈 视频`, 10, { domain: "bilibili.com" })
+      .catch(() => []),
     Promise.all(webQueries.map((query) => searchWeb(query, 10).catch(() => []))),
     searchWeb(`"${guestName}" 百度百科`, 8).catch(() => [])
   ]);
@@ -1851,6 +1866,7 @@ async function collectFollowupCandidatesForGuest({
   const seen = new Set();
   for (const item of [
     ...videoBatches.flat(),
+    ...videoWebResults,
     ...webBatches.flat().filter(isUsableResearchEvidence),
     ...knowledge,
     ...profileSources
@@ -1873,6 +1889,43 @@ async function collectFollowupCandidatesForGuest({
   }
   candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
   return candidates.slice(0, 18);
+}
+
+function ensureFollowupCategoryCoverage(candidates, guestName) {
+  const output = Array.isArray(candidates) ? [...candidates] : [];
+  const hasVideo = output.some((item) =>
+    item.inferredType === "podcast" || item.inferredType === "video"
+  );
+  const hasArticle = output.some((item) => item.inferredType === "article");
+  if (!hasVideo) {
+    const query = `${guestName} 访谈`;
+    output.push({
+      guestName,
+      title: `在 Bilibili 搜索“${query}”`,
+      content: `暂未检索到${guestName}可验证的具体视频，点击查看 Bilibili 的实时搜索结果。`,
+      url: `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`,
+      media: "Bilibili 搜索",
+      publishDate: "",
+      inferredType: "video",
+      relevanceScore: 1,
+      searchFallback: true
+    });
+  }
+  if (!hasArticle) {
+    const query = `${guestName} 人物专访`;
+    output.push({
+      guestName,
+      title: `在百度搜索“${query}”`,
+      content: `暂未检索到${guestName}可验证的具体文章，点击查看百度的实时搜索结果。`,
+      url: `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`,
+      media: "百度搜索",
+      publishDate: "",
+      inferredType: "article",
+      relevanceScore: 1,
+      searchFallback: true
+    });
+  }
+  return output;
 }
 
 function cleanFollowupSearchTerm(value) {
@@ -1979,7 +2032,11 @@ function buildCandidateFollowup(candidates, names, topics) {
     .sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a))
     .map(followupItemFromCandidate);
   return {
-    intro: `已分别整理${names.join("、")}的延伸资料。`,
+    intro: `已分别整理${names.join("、")}的延伸资料。${
+      candidates.some((item) => item.searchFallback)
+        ? " 部分分类暂未找到足够可靠的具体链接，已提供对应平台的搜索入口。"
+        : ""
+    }`,
     topics: [...names, ...topics].filter(Boolean).slice(0, 8),
     items: ContentUtils.balanceFollowupGuestItems(
       [],
