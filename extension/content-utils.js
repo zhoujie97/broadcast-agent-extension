@@ -7,6 +7,14 @@
       .filter(Boolean))];
   }
 
+  function isPlausiblePersonName(value) {
+    const name = String(value || "").replace(/\s+/gu, "").trim();
+    if (name.length < 2 || name.length > 20) return false;
+    if (/[：:，,。！？!?《》【】（）()]/u.test(name)) return false;
+    return !/^(?:主持人|采访者|被采访者|嘉宾|本期嘉宾|节目主持|未知人物)$/u
+      .test(name);
+  }
+
   function remixCacheScope(style, length, guestName) {
     const normalizedStyle = String(style || "profile");
     const normalizedLength = String(length || "medium");
@@ -161,6 +169,7 @@
   root.ContentUtils = Object.freeze({
     PERSON_SPECIFIC_REMIX_STYLES,
     normalizeGuestNames,
+    isPlausiblePersonName,
     remixCacheScope,
     balanceFollowupGuestItems,
     normalizeComparableTitle,

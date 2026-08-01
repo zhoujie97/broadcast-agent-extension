@@ -5,11 +5,19 @@ await import("../extension/content-utils.js");
 const {
   balanceFollowupGuestItems,
   findStableTranscriptSegmentIndex,
+  isPlausiblePersonName,
   isSameVideoCandidate,
   shouldExcludeFollowupResult,
   normalizeGuestNames,
   remixCacheScope
 } = globalThis.ContentUtils;
+
+test("accepts names but rejects titles and generic interview roles", () => {
+  assert.equal(isPlausiblePersonName("金靖"), true);
+  assert.equal(isPlausiblePersonName("易立竞"), true);
+  assert.equal(isPlausiblePersonName("鲁豫对话金靖:什么是真正的自由"), false);
+  assert.equal(isPlausiblePersonName("本期嘉宾"), false);
+});
 
 test("uses the selected guest in person-specific remix cache scopes", () => {
   assert.equal(

@@ -498,6 +498,104 @@ async function generateOverview(payload = {}) {
   return { ok: true, overview: result };
 }
 
+async function identifyInterviewPeople(payload = {}) {
+  const segments = requireTranscriptSegments(payload.segments);
+  const transcript = prepareTranscriptForAi(segments, 26000);
+  const video = payload.video || {};
+  const webResults = await searchWeb(
+    `${String(video.title || "").slice(0, 52)} ${video.publisher || ""} 主持人 嘉宾`,
+    10
+  ).catch(() => []);
+  const result = await callAiJson({
+    schemaName: "interview_people_identification",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        interviewers: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              role: { type: "string" }
+            },
+            required: ["name", "role"]
+          }
+        },
+        interviewees: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              role: { type: "string" }
+            },
+            required: ["name", "role"]
+          }
+        }
+      },
+      required: ["interviewers", "interviewees"]
+    },
+    instructions:
+      "你是采访角色识别编辑。仅识别当前视频中实际参与对话的人：interviewers 是主要负责提问、主持或引导话题的人；interviewees 是主要回答、讲述经历或表达观点的嘉宾。只返回人名，不得把节目名、视频标题、主题、机构、组合名或‘主持人、嘉宾’等角色词当成人名。多人访谈必须完整列出每一位主要被采访者，不能只返回第一位。姓名优先逐字采用视频标题和发布者中的写法；字幕与标题发生同音字冲突时以标题为准。不要把被谈到但没有参与本期对话的人列入。role 只写简短的本期角色，如‘采访者’‘被采访者’。",
+    input: JSON.stringify({
+      videoTitle: video.title || "",
+      publisher: video.publisher || "",
+      description: String(video.description || "").slice(0, 1600),
+      transcript,
+      webResults: webResults.slice(0, 10)
+    }),
+    temperature: 0,
+    maxTokens: 1200,
+    validateResult: (value) => {
+      const people = Array.isArray(value?.interviewees) ? value.interviewees : [];
+      return people.some((person) => ContentUtils.isPlausiblePersonName(person?.name))
+        ? []
+        : ["没有识别到有效的被采访者姓名"];
+    }
+  });
+  const interviewerNames = new Set();
+  const toProfiles = (people, fallbackRole) => (Array.isArray(people) ? people : [])
+    .filter((person) => ContentUtils.isPlausiblePersonName(person?.name))
+    .map((person) => {
+      const name = String(person.name).replace(/\s+/gu, "").trim();
+      const evidence = webResults.filter((item) =>
+        PersonUtils.countEvidenceSupport([item], name) === 1
+      ).slice(0, 2);
+      return {
+        name,
+        role: String(person.role || fallbackRole).slice(0, 24),
+        bio: "",
+        knownFor: "",
+        sourceLinks: evidence.map((item) => ({ title: item.title, url: item.url }))
+      };
+    });
+  const interviewers = toProfiles(result.interviewers, "采访者")
+    .filter((person) => {
+      if (interviewerNames.has(person.name)) return false;
+      interviewerNames.add(person.name);
+      return true;
+    });
+  const interviewerSet = new Set(interviewers.map((person) => person.name));
+  const seenInterviewees = new Set();
+  const interviewees = toProfiles(result.interviewees, "被采访者")
+    .filter((person) => {
+      if (interviewerSet.has(person.name) || seenInterviewees.has(person.name)) return false;
+      seenInterviewees.add(person.name);
+      return true;
+    });
+  if (!interviewees.length) {
+    throw createError(
+      "INTERVIEW_PEOPLE_NOT_IDENTIFIED",
+      "暂时无法从标题和智能稿本中可靠识别被采访者，请稍后重试。"
+    );
+  }
+  return { interviewers, interviewees };
+}
+
 async function correctOverview(payload = {}) {
   const feedback = String(payload.feedback || "").replace(/\s+/gu, " ").trim();
   if (feedback.length < 4 || feedback.length > 1000) {
@@ -1544,21 +1642,22 @@ function deduplicateSearchResults(results, limit) {
 }
 
 async function generateFollowup(payload = {}) {
-  const overview = payload.overview || {};
-  const names = ContentUtils.normalizeGuestNames(Array.isArray(overview.interviewees)
+  let overview = payload.overview || {};
+  let identifiedPeople = null;
+  let names = ContentUtils.normalizeGuestNames(Array.isArray(overview.interviewees)
     ? overview.interviewees.map((person) => person.name)
     : [])
     .map(cleanFollowupSearchTerm)
-    .filter((name) => name.length >= 2)
-    .slice(0, 3);
-  const topics = collectFollowupTopics(overview);
-  const title = String(payload.video?.title || "").slice(0, 48);
+    .filter((name) => name.length >= 2);
   if (!names.length) {
-    throw createError(
-      "FOLLOWUP_INTERVIEWEES_REQUIRED",
-      "请先生成内容地图并识别被采访者，再生成延伸探索。"
+    identifiedPeople = await identifyInterviewPeople(payload);
+    overview = { ...overview, ...identifiedPeople };
+    names = ContentUtils.normalizeGuestNames(
+      identifiedPeople.interviewees.map((person) => person.name)
     );
   }
+  const topics = collectFollowupTopics(overview);
+  const title = String(payload.video?.title || "").slice(0, 48);
   const subjects = names;
   const candidateGroups = await Promise.all(subjects.map((guestName) =>
     collectFollowupCandidatesForGuest({
@@ -1657,7 +1756,8 @@ async function generateFollowup(payload = {}) {
   } catch {
     return {
       ok: true,
-      followup: buildCandidateFollowup(candidates, subjects, topics)
+      followup: buildCandidateFollowup(candidates, subjects, topics),
+      ...(identifiedPeople ? { people: identifiedPeople } : {})
     };
   }
   const allowedPairs = new Set(candidates.map((item) =>
@@ -1698,7 +1798,11 @@ async function generateFollowup(payload = {}) {
     ...(Array.isArray(result.topics) ? result.topics : []),
     ...topics
   ]).slice(0, 8);
-  return { ok: true, followup: result };
+  return {
+    ok: true,
+    followup: result,
+    ...(identifiedPeople ? { people: identifiedPeople } : {})
+  };
 }
 
 async function collectFollowupCandidatesForGuest({
@@ -2035,8 +2139,17 @@ async function generateRemix(payload = {}) {
   const requestedStyle = String(payload.style || "profile");
   const style = allowedStyles.includes(requestedStyle) ? requestedStyle : "profile";
   const length = String(payload.length || "medium");
-  const people = payload.people || {};
-  const interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
+  let people = payload.people || {};
+  let interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
+  let identifiedPeople = null;
+  if (!interviewees.length) {
+    identifiedPeople = await identifyInterviewPeople(payload);
+    people = {
+      interviewers: identifiedPeople.interviewers.map((person) => person.name),
+      interviewees: identifiedPeople.interviewees.map((person) => person.name)
+    };
+    interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
+  }
   const interviewers = (Array.isArray(people.interviewers)
     ? people.interviewers
     : []).map((name) => String(name || "").trim()).filter(Boolean);
@@ -2048,6 +2161,13 @@ async function generateRemix(payload = {}) {
     interviewees.length > 1 &&
     !interviewees.includes(requestedGuest)
   ) {
+    if (identifiedPeople) {
+      return {
+        ok: true,
+        selectionRequired: true,
+        people: identifiedPeople
+      };
+    }
     throw createError("REMIX_GUEST_REQUIRED", "请选择要写作的嘉宾对象。");
   }
   const primaryGuest = interviewees.includes(requestedGuest)
@@ -2123,7 +2243,11 @@ async function generateRemix(payload = {}) {
       length
     )
   });
-  return { ok: true, remix: result };
+  return {
+    ok: true,
+    remix: result,
+    ...(identifiedPeople ? { people: identifiedPeople } : {})
+  };
 }
 
 function remixValidationIssues(result, style, length) {

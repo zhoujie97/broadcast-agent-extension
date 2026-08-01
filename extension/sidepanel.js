@@ -372,19 +372,36 @@ function updateAiConfigState() {
   elements.generateClipsButton.disabled = transcriptUnavailable;
   elements.generateRemixButton.disabled = transcriptUnavailable;
   elements.askButton.disabled = transcriptUnavailable;
-  const followupUnavailable = !hasIdentifiedInterviewees();
-  elements.generateFollowupButton.disabled = transcriptUnavailable || followupUnavailable;
-  if (followupUnavailable) {
-    elements.generateFollowupButton.textContent = "请先生成内容地图";
-  } else if (elements.generateFollowupButton.textContent === "请先生成内容地图") {
-    elements.generateFollowupButton.textContent = "生成延伸探索";
-  }
+  elements.generateFollowupButton.disabled = transcriptUnavailable;
 }
 
 function hasIdentifiedInterviewees() {
   return (Array.isArray(currentOverview?.interviewees)
     ? currentOverview.interviewees
     : []).some((person) => String(person?.name || "").trim().length >= 2);
+}
+
+async function applyIdentifiedPeople(people = {}, persist = true) {
+  const interviewees = Array.isArray(people.interviewees)
+    ? people.interviewees.filter((person) => String(person?.name || "").trim())
+    : [];
+  if (!interviewees.length) return false;
+  const interviewers = Array.isArray(people.interviewers)
+    ? people.interviewers.filter((person) => String(person?.name || "").trim())
+    : [];
+  currentOverview = {
+    ...(currentOverview || {}),
+    interviewers,
+    interviewees
+  };
+  updateRemixGuestOptions(currentOverview);
+  updateAiConfigState();
+  if (persist && currentVideo) {
+    await chrome.storage.local.set({
+      [videoStorageKey("identifiedPeopleV1")]: { interviewers, interviewees }
+    });
+  }
+  return true;
 }
 
 async function loadTranscript() {
@@ -649,12 +666,13 @@ function transcriptForAi() {
 
 async function loadWorkspaceData() {
   const overviewKey = videoStorageKey("contentMapV8");
+  const identifiedPeopleKey = videoStorageKey("identifiedPeopleV1");
   const notesKey = videoStorageKey("timelineNotes");
   const followupKey = videoStorageKey("followupV5");
   const clipsKey = videoStorageKey("contentValueRadarV8");
   const clipFavoritesKey = videoStorageKey("contentValueFavoritesV2");
   const stored = await chrome.storage.local.get([
-    overviewKey, notesKey, followupKey, clipsKey, clipFavoritesKey
+    overviewKey, identifiedPeopleKey, notesKey, followupKey, clipsKey, clipFavoritesKey
   ]);
   notes = Array.isArray(stored[notesKey]) ? stored[notesKey] : [];
   renderNotes();
@@ -663,6 +681,9 @@ async function loadWorkspaceData() {
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } else if (stored[overviewKey]) {
     await chrome.storage.local.remove(overviewKey);
+  }
+  if (!hasIdentifiedInterviewees() && stored[identifiedPeopleKey]) {
+    await applyIdentifiedPeople(stored[identifiedPeopleKey], false);
   }
   await loadSelectedRemix();
   if (stored[followupKey]) {
@@ -1409,8 +1430,7 @@ function setModuleBusy(module, busy) {
     if (busy) elements.questionError.hidden = true;
   }
   if (module === "followup") {
-    elements.generateFollowupButton.disabled =
-      busy || unavailable || !hasIdentifiedInterviewees();
+    elements.generateFollowupButton.disabled = busy || unavailable;
     elements.followupLoading.hidden = !busy;
     if (busy) elements.followupError.hidden = true;
   }
@@ -1418,22 +1438,21 @@ function setModuleBusy(module, busy) {
 
 async function generateFollowup() {
   if (!currentVideo) return;
-  if (!hasIdentifiedInterviewees()) {
-    elements.followupError.textContent =
-      "请先生成内容地图并识别被采访者，再生成延伸探索。";
-    elements.followupError.hidden = false;
-    return;
-  }
   if (!(await ensureAiConsent())) return;
   setModuleBusy("followup", true);
   try {
     const response = await chrome.runtime.sendMessage({
       type: "GENERATE_FOLLOWUP",
-      payload: { video: currentVideo, overview: currentOverview }
+      payload: {
+        video: currentVideo,
+        overview: currentOverview,
+        segments: transcriptForAi()
+      }
     });
     if (!response?.ok) {
       throw new Error(response?.error?.message || "延伸探索生成失败。");
     }
+    if (response.people) await applyIdentifiedPeople(response.people);
     renderFollowup(response.followup);
     await chrome.storage.local.set({
       [videoStorageKey("followupV5")]: response.followup
@@ -1623,6 +1642,14 @@ async function generateRemix() {
     if (!response?.ok) {
       throw new Error(response?.error?.message || "内容重构生成失败。");
     }
+    if (response.people) await applyIdentifiedPeople(response.people);
+    if (response.selectionRequired) {
+      elements.remixError.textContent =
+        `已自动识别 ${getIntervieweeNames(currentOverview).join("、")}，请选择嘉宾对象后再次生成。`;
+      elements.remixError.classList.add("info");
+      elements.remixError.hidden = false;
+      return;
+    }
     renderRemix(response.remix);
     await chrome.storage.local.set({
       [videoStorageKey(
@@ -1631,6 +1658,7 @@ async function generateRemix() {
       )]: response.remix
     });
   } catch (error) {
+    elements.remixError.classList.remove("info");
     elements.remixError.textContent = error.message;
     elements.remixError.hidden = false;
   } finally {
@@ -1752,6 +1780,7 @@ function renderRemix(remix) {
   }
   elements.remixDisclaimer.textContent = remix.disclaimer ||
     "本文由 AI 基于采访智能稿本重写，未引入稿本之外的事实。";
+  elements.remixError.classList.remove("info");
   elements.remixError.hidden = true;
   elements.remixOutput.hidden = false;
 }

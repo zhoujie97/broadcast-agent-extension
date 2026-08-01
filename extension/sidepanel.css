@@ -1324,6 +1324,12 @@ h2 {
   font-weight: 650;
 }
 
+.module-error.info {
+  color: var(--foreground);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .remix-controls,
 .question-form {
   display: grid;
