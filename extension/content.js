@@ -12,7 +12,7 @@ for (const stalePanel of document.querySelectorAll("#podcast-reader-floating-pan
 }
 
 let observedVideo = null;
-let lastReportedSecond = -1;
+let lastReportedTick = -1;
 let noteOverlay = null;
 let noteOverlayPosition = null;
 let floatingPanel = null;
@@ -451,18 +451,33 @@ function keepFloatingPanelInViewport() {
 function findVideo() {
   const videos = [...document.querySelectorAll("video")];
   if (!videos.length) return null;
-  return videos
-    .map((video) => {
-      const rect = video.getBoundingClientRect();
-      const area = Math.max(0, rect.width) * Math.max(0, rect.height);
-      const score =
-        area +
-        (video.readyState > 0 ? 1_000_000 : 0) +
-        (!video.paused ? 2_000_000 : 0) +
-        (video.currentTime > 0 ? 500_000 : 0);
-      return { video, score };
-    })
-    .sort((a, b) => b.score - a.score)[0].video;
+  const candidates = videos.map((video) => {
+    const rect = video.getBoundingClientRect();
+    const style = window.getComputedStyle(video);
+    const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+    const visible =
+      area >= 10_000 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || 1) > 0;
+    return { video, area, visible };
+  });
+  const visibleCandidates = candidates.filter((item) => item.visible);
+  const pool = visibleCandidates.length ? visibleCandidates : candidates;
+  const playing = pool.filter((item) =>
+    !item.video.paused && !item.video.ended && item.video.readyState > 0
+  );
+  if (playing.length) {
+    const observedPlaying = playing.find((item) => item.video === observedVideo);
+    if (observedPlaying) return observedPlaying.video;
+    return playing.sort((a, b) => b.area - a.area)[0].video;
+  }
+  const stable = pool.find((item) => item.video === observedVideo);
+  if (stable) return stable.video;
+  return pool.sort((a, b) =>
+    Number(b.video.readyState > 0) - Number(a.video.readyState > 0) ||
+    b.area - a.area
+  )[0].video;
 }
 
 async function seekVideo(seconds) {
@@ -571,7 +586,7 @@ function attachPlaybackObserver(video) {
     }
   }
   observedVideo = video;
-  lastReportedSecond = -1;
+  lastReportedTick = -1;
   for (const event of ["timeupdate", "play", "seeked", "loadedmetadata"]) {
     observedVideo.addEventListener(event, reportPlaybackTime);
   }
@@ -582,9 +597,9 @@ function attachPlaybackObserver(video) {
 function reportPlaybackTime(force = false) {
   const video = observedVideo || findVideo();
   if (!video) return;
-  const wholeSecond = Math.floor(Number(video.currentTime) || 0);
-  if (!force && wholeSecond === lastReportedSecond) return;
-  lastReportedSecond = wholeSecond;
+  const playbackTick = Math.floor((Number(video.currentTime) || 0) * 4);
+  if (!force && playbackTick === lastReportedTick) return;
+  lastReportedTick = playbackTick;
   safeRuntimeSend({
     type: "PLAYBACK_TIME",
     seconds: Number(video.currentTime) || 0,

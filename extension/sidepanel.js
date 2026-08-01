@@ -117,6 +117,7 @@ let currentVideo = null;
 let aiAvailable = false;
 let aiModelName = "云端模型";
 let currentPlaybackSeconds = 0;
+let lastPlaybackPushAt = 0;
 let notes = [];
 let pendingNoteSeconds = 0;
 let currentRemix = null;
@@ -194,6 +195,7 @@ elements.clearAllDataButton.addEventListener("click", clearAllLocalData);
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "PLAYBACK_TIME") {
+    lastPlaybackPushAt = Date.now();
     currentPlaybackSeconds = Math.max(0, Number(message.seconds) || 0);
     elements.currentTime.textContent = formatTime(message.seconds);
     highlightCurrentSegment(message.seconds);
@@ -328,6 +330,7 @@ async function clearAllLocalData() {
 
 async function syncPlaybackState() {
   if (!currentVideo) return;
+  if (Date.now() - lastPlaybackPushAt < 2500) return;
   try {
     const response = await chrome.runtime.sendMessage({ type: "GET_PLAYBACK_STATE" });
     if (!response?.ok) return;
@@ -1494,14 +1497,7 @@ function renderFollowup(followup) {
 }
 
 function isCurrentVideoFollowup(result, url) {
-  const currentBvid = String(currentVideo?.bvid || "").toUpperCase();
-  const resultBvid = url.match(/\/video\/(BV[a-zA-Z0-9]+)/u)?.[1]
-    ?.toUpperCase() || "";
-  if (currentBvid && resultBvid === currentBvid) return true;
-  const normalize = (value) => String(value || "")
-    .replace(/[\s|｜·•—–_《》“”"'：:，,。！？!?（）()【】\[\]]+/gu, "")
-    .toLocaleLowerCase();
-  return normalize(result.title) === normalize(currentVideo?.title);
+  return ContentUtils.shouldExcludeFollowupResult(result, currentVideo, url);
 }
 
 function followupTypeLabel(type) {
@@ -2032,7 +2028,12 @@ async function seekVideo(seconds, { preservePreview = false } = {}) {
 }
 
 function highlightCurrentSegment(seconds, shouldScroll = false) {
-  const index = findSegmentIndex(transcriptSegments, seconds);
+  const index = ContentUtils.findStableTranscriptSegmentIndex(
+    transcriptSegments,
+    seconds,
+    shouldScroll ? -1 : activeSegmentIndex,
+    shouldScroll ? 0 : 0.22
+  );
   if (index === activeSegmentIndex) {
     return;
   }
@@ -2055,28 +2056,6 @@ function highlightCurrentSegment(seconds, shouldScroll = false) {
       behavior: "smooth"
     });
   }
-}
-
-function findSegmentIndex(segments, seconds) {
-  let low = 0;
-  let high = segments.length - 1;
-
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const segment = segments[middle];
-
-    if (seconds < segment.from) {
-      high = middle - 1;
-    } else if (seconds >= segment.to) {
-      low = middle + 1;
-    } else {
-      return middle;
-    }
-  }
-
-  return high >= 0 && seconds >= segments[high].from
-    ? high
-    : -1;
 }
 
 function filterTranscript() {
@@ -2161,6 +2140,7 @@ function resetTranscript() {
   activeSegmentIndex = -1;
   currentVideo = null;
   currentPlaybackSeconds = 0;
+  lastPlaybackPushAt = 0;
   notes = [];
   currentRemix = null;
   currentOverview = null;

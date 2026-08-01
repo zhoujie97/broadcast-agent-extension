@@ -4,6 +4,9 @@ import test from "node:test";
 await import("../extension/content-utils.js");
 const {
   balanceFollowupGuestItems,
+  findStableTranscriptSegmentIndex,
+  isSameVideoCandidate,
+  shouldExcludeFollowupResult,
   normalizeGuestNames,
   remixCacheScope
 } = globalThis.ContentUtils;
@@ -32,13 +35,13 @@ test("normalizes duplicate interviewee names", () => {
 
 test("keeps recommendations for every interviewee", () => {
   const selected = [
-    { guestName: "庞颖", url: "https://example.com/pang-1" }
+    { guestName: "庞颖", type: "video", url: "https://example.com/pang-1" }
   ];
   const fallbacks = [
-    { guestName: "庞颖", url: "https://example.com/pang-1" },
-    { guestName: "庞颖", url: "https://example.com/pang-2" },
-    { guestName: "詹青云", url: "https://example.com/zhan-1" },
-    { guestName: "詹青云", url: "https://example.com/zhan-2" }
+    { guestName: "庞颖", type: "video", url: "https://example.com/pang-1" },
+    { guestName: "庞颖", type: "article", url: "https://example.com/pang-2" },
+    { guestName: "詹青云", type: "video", url: "https://example.com/zhan-1" },
+    { guestName: "詹青云", type: "article", url: "https://example.com/zhan-2" }
   ];
   const balanced = balanceFollowupGuestItems(
     selected,
@@ -56,4 +59,59 @@ test("keeps recommendations for every interviewee", () => {
       "詹青云:https://example.com/zhan-2"
     ]
   );
+});
+
+test("adds both video and article coverage for each interviewee", () => {
+  const balanced = balanceFollowupGuestItems(
+    [
+      { guestName: "庞颖", type: "video", url: "https://example.com/video-1" },
+      { guestName: "庞颖", type: "video", url: "https://example.com/video-2" }
+    ],
+    [
+      { guestName: "庞颖", type: "article", url: "https://example.com/article-1" }
+    ],
+    ["庞颖"],
+    2
+  );
+  assert.deepEqual(balanced.map((item) => item.type), ["video", "video", "article"]);
+});
+
+test("detects the current Bilibili video by BV id or near-identical title", () => {
+  const currentVideo = {
+    aid: 123456,
+    bvid: "BV1ABC123",
+    title: "鲁豫有约一日行：金靖谈幽默与成长"
+  };
+  assert.equal(isSameVideoCandidate({
+    title: "任意标题",
+    url: "https://www.bilibili.com/video/BV1abc123?p=1"
+  }, currentVideo), true);
+  assert.equal(isSameVideoCandidate({
+    title: "标题经过改写",
+    url: "https://www.bilibili.com/video/av123456"
+  }, currentVideo), true);
+  assert.equal(isSameVideoCandidate({
+    title: "鲁豫有约一日行 金靖谈幽默与成长 金靖专访",
+    url: "https://www.bilibili.com/video/BV9OTHER"
+  }, currentVideo), true);
+  assert.equal(isSameVideoCandidate({
+    title: "金靖参加另一档访谈节目",
+    url: "https://www.bilibili.com/video/BV9OTHER"
+  }, currentVideo), false);
+  assert.equal(shouldExcludeFollowupResult({
+    title: "鲁豫有约一日行 金靖专访",
+    url: "https://example.com/unknown",
+    why: "这是本期节目的原始视频，但根据要求不推荐，故此处仅作占位。"
+  }, currentVideo), true);
+});
+
+test("keeps transcript highlighting stable around adjacent boundaries", () => {
+  const segments = [
+    { from: 76, to: 89 },
+    { from: 90, to: 112 }
+  ];
+  assert.equal(findStableTranscriptSegmentIndex(segments, 90.05, 0), 0);
+  assert.equal(findStableTranscriptSegmentIndex(segments, 90.25, 0), 1);
+  assert.equal(findStableTranscriptSegmentIndex(segments, 89.9, 1), 1);
+  assert.equal(findStableTranscriptSegmentIndex(segments, 89.7, 1), 0);
 });

@@ -1570,6 +1570,20 @@ async function generateFollowup(payload = {}) {
       `暂未检索到${missingGuests.join("、")}的可靠延伸资料，请稍后重试。`
     );
   }
+  const incompleteGuests = subjects.filter((_name, index) => {
+    const group = candidateGroups[index];
+    const hasVideo = group.some((item) =>
+      item.inferredType === "podcast" || item.inferredType === "video"
+    );
+    const hasArticle = group.some((item) => item.inferredType === "article");
+    return !hasVideo || !hasArticle;
+  });
+  if (incompleteGuests.length) {
+    throw createError(
+      "FOLLOWUP_GUEST_CATEGORY_MISSING",
+      `暂未同时找到${incompleteGuests.join("、")}的视频和文章资料，请稍后重试。`
+    );
+  }
   const candidates = candidateGroups.flat();
   if (!candidates.length) {
     throw createError(
@@ -1615,7 +1629,7 @@ async function generateFollowup(payload = {}) {
       required: ["intro", "topics", "items"]
     },
     instructions:
-      `你是播客研究编辑。候选资料已按被采访者标注 guestName。必须为${subjects.join("、")}每人分别挑选3至6条最能帮助用户继续理解该人物及本期主题的资料，不能只返回第一位嘉宾，也不能把甲的资料归到乙名下。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。绝对不要推荐本期原视频。why 要具体说明资料与对应嘉宾及本期的连接。guestName 和 URL 必须逐字复制候选值，绝不能编造链接或改变归属。`,
+      `你是播客研究编辑。候选资料已按被采访者标注 guestName。必须为${subjects.join("、")}每人分别挑选3至6条最能帮助用户继续理解该人物及本期主题的资料，而且每人至少包含1条 podcast 或 video 以及1条 article；不能只返回第一位嘉宾，不能把甲的资料归到乙名下。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。绝对不要推荐本期原视频，也不要输出“原视频仅作占位”之类的项目。why 要具体说明资料与对应嘉宾及本期的连接。guestName 和 URL 必须逐字复制候选值，绝不能编造链接或改变归属。`,
     input: JSON.stringify({
       videoTitle: title,
       interviewees: subjects,
@@ -1642,7 +1656,11 @@ async function generateFollowup(payload = {}) {
         ? item.type
         : inferFollowupType(item)
     }))
-    .filter((item) => item?.url && !isSearchLandingPage(item.url));
+    .filter((item) =>
+      item?.url &&
+      !isSearchLandingPage(item.url) &&
+      !isCurrentVideoResult(item, payload.video)
+    );
   result.items = ContentUtils.balanceFollowupGuestItems(
     selectedItems,
     fallbackItems,
@@ -1780,21 +1798,11 @@ function isSearchLandingPage(value) {
 }
 
 function isCurrentVideoResult(item, video = {}) {
-  const currentBvid = String(video.bvid || "").toUpperCase();
-  const resultBvid = String(item.url || "")
-    .match(/\/video\/(BV[a-zA-Z0-9]+)/u)?.[1]
-    ?.toUpperCase() || "";
-  if (currentBvid && resultBvid === currentBvid) return true;
-  const currentTitle = normalizeComparableTitle(video.title);
-  const resultTitle = normalizeComparableTitle(item.title);
-  return Boolean(currentTitle && resultTitle && currentTitle === resultTitle);
+  return ContentUtils.shouldExcludeFollowupResult(item, video);
 }
 
 function normalizeComparableTitle(value) {
-  return String(value || "")
-    .replace(/<[^>]+>/gu, "")
-    .replace(/[\s|｜·•—–_《》“”"'：:，,。！？!?（）()【】\[\]]+/gu, "")
-    .toLocaleLowerCase();
+  return ContentUtils.normalizeComparableTitle(value);
 }
 
 async function searchBilibiliVideos(query, count = 8) {
