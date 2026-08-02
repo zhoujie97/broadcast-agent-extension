@@ -2,22 +2,61 @@
 
 一款面向 Bilibili 访谈、播客和长视频的 Chrome / Edge 浏览器扩展。它可以读取视频字幕并生成智能稿本、内容地图、高光切片、人物资料、知识笔记和深度文章。
 
-当前扩展版本：`v1.0.15`
+![](效果图/智能稿本.png)
+当前扩展版本：`v1.0.16`
 
+- [v1.0.16 版本说明](docs/v1.0.16-release-notes.md)
 - [v1.0.15 版本说明](docs/v1.0.15-release-notes.md)
 - [扩展完整使用说明](extension/README.md)
 - [Vercel 部署说明](DEPLOYMENT.md)
 
 ## 主要功能
 
-- 读取 Bilibili 中文字幕，合并成带时间戳的智能稿本
-- 点击时间戳跳转视频，并随播放进度高亮当前内容
-- 生成人物资料、采访主题地图和 8 至 10 个高光切片
-- 人物资料优先检索百度百科，并结合视频上下文校验身份
-- 支持人工修正字幕中的错误姓名，例如 `叶利静 → 易立竞`
-- 支持自然语言纠错，由 AI 核实后更新人物和内容信息
-- 为每个高光片段推荐 3 首歌曲，并提供抖音搜索入口
-- 支持选中文字解释、视频问答、知识笔记和内容重构
+- 智能稿本：读取 Bilibili 中文字幕，合并成带时间戳的智能稿本；点击时间戳跳转视频，并随播放进度高亮当前内容；选中文字既可以结合前后文理解。
+<div align="center">
+
+<img src="效果图/智能稿本1.png" width="40%">
+<img src="效果图/智能稿本-ai理解.png" width="49%">
+
+</div>
+
+- 内容地图：生成人物资料、采访主题地图、人物生命轨迹、思想金句；人物资料优先检索百度百科，并结合视频上下文校验身份；支持人工修正字幕中的错误姓名，例如 `叶利静 → 易立竞`；支持自然语言纠错，由 AI 核实后更新人物和内容信息
+
+<div align="center">
+
+<img src="效果图/内容地图1.png" width="30%">
+<img src="效果图/内容地图2.png" width="30%">
+<img src="效果图/内容地图3.png" width="30%">
+<img src="效果图/内容地图4.png" width="30%">
+<img src="效果图/内容地图-人物轨迹.png" width="30%">
+<img src="效果图/内容地图-思想碎片.png" width="30%">
+
+</div>
+
+- 高光切片：生成8 至 10 个高光切片为每个高光片段便于长视频播客在短视频上的传播，推荐 3 首适配该片段的歌曲bgm，并提供抖音搜索入口
+<div align="center">
+
+<img src="效果图/高光切片1.png" width="30%">
+<img src="效果图/高光切片2.png" width="30%">
+<img src="效果图/高光切片3.png" width="30%">
+
+</div>
+
+
+- 内容重构：被采访者可分别选择生成人物特写或第一人称自述、深度文章，可以选择1000字、2000字、3000字。
+- 支持视频AI问答、知识笔记
+- 延伸探索会为每位嘉宾分别推荐资料
+
+<div align="center">
+
+<img src="效果图/内容重构1.png" width="50%">
+<img src="效果图/延伸探索.png" width="41%">
+<img src="效果图/知识笔记1.png" >
+<img src="效果图/知识笔记-ai提问.png">
+
+</div>
+
+
 - AI Key 只保存在服务端，扩展使用 Vercel HTTPS 代理
 
 ## 普通用户安装
@@ -25,7 +64,7 @@
 如果你拿到的是发布压缩包：
 
 1. 解压 `broadcast-agent-extension.zip`。
-2. 打开 `chrome://extensions` 或 `edge://extensions`。
+2. 打开 `edge://extensions`。
 3. 开启“开发者模式”。
 4. 点击“加载已解压的扩展程序”。
 5. 选择解压后的扩展文件夹。
@@ -41,7 +80,7 @@
 npm install
 
 API_BASE_URL=https://broadcast-agent-extension.vercel.app \
-RELEASE_VERSION=1.0.15 \
+RELEASE_VERSION=1.0.16 \
 npm run package:extension
 ```
 

@@ -1,4 +1,4 @@
-importScripts("person-utils.js");
+importScripts("person-utils.js", "content-utils.js");
 
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
@@ -61,7 +61,10 @@ async function removeLegacyTranscriptAiCaches() {
       key.startsWith("remix:") ||
       key.startsWith("remixV2:") ||
       key.startsWith("remixV3:") ||
-      key.startsWith("followupV2:")
+      key.startsWith("remixV4:") ||
+      key.startsWith("followupV2:") ||
+      key.startsWith("followupV3:") ||
+      key.startsWith("followupV4:")
     );
   const sessionKeys = Object.keys(sessionValues)
     .filter((key) => key.startsWith("speakerLabels:"));
@@ -493,6 +496,104 @@ async function generateOverview(payload = {}) {
     result.interviewees = enriched.interviewees;
   }
   return { ok: true, overview: result };
+}
+
+async function identifyInterviewPeople(payload = {}) {
+  const segments = requireTranscriptSegments(payload.segments);
+  const transcript = prepareTranscriptForAi(segments, 26000);
+  const video = payload.video || {};
+  const webResults = await searchWeb(
+    `${String(video.title || "").slice(0, 52)} ${video.publisher || ""} 主持人 嘉宾`,
+    10
+  ).catch(() => []);
+  const result = await callAiJson({
+    schemaName: "interview_people_identification",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        interviewers: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              role: { type: "string" }
+            },
+            required: ["name", "role"]
+          }
+        },
+        interviewees: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              role: { type: "string" }
+            },
+            required: ["name", "role"]
+          }
+        }
+      },
+      required: ["interviewers", "interviewees"]
+    },
+    instructions:
+      "你是采访角色识别编辑。仅识别当前视频中实际参与对话的人：interviewers 是主要负责提问、主持或引导话题的人；interviewees 是主要回答、讲述经历或表达观点的嘉宾。只返回人名，不得把节目名、视频标题、主题、机构、组合名或‘主持人、嘉宾’等角色词当成人名。多人访谈必须完整列出每一位主要被采访者，不能只返回第一位。姓名优先逐字采用视频标题和发布者中的写法；字幕与标题发生同音字冲突时以标题为准。不要把被谈到但没有参与本期对话的人列入。role 只写简短的本期角色，如‘采访者’‘被采访者’。",
+    input: JSON.stringify({
+      videoTitle: video.title || "",
+      publisher: video.publisher || "",
+      description: String(video.description || "").slice(0, 1600),
+      transcript,
+      webResults: webResults.slice(0, 10)
+    }),
+    temperature: 0,
+    maxTokens: 1200,
+    validateResult: (value) => {
+      const people = Array.isArray(value?.interviewees) ? value.interviewees : [];
+      return people.some((person) => ContentUtils.isPlausiblePersonName(person?.name))
+        ? []
+        : ["没有识别到有效的被采访者姓名"];
+    }
+  });
+  const interviewerNames = new Set();
+  const toProfiles = (people, fallbackRole) => (Array.isArray(people) ? people : [])
+    .filter((person) => ContentUtils.isPlausiblePersonName(person?.name))
+    .map((person) => {
+      const name = String(person.name).replace(/\s+/gu, "").trim();
+      const evidence = webResults.filter((item) =>
+        PersonUtils.countEvidenceSupport([item], name) === 1
+      ).slice(0, 2);
+      return {
+        name,
+        role: String(person.role || fallbackRole).slice(0, 24),
+        bio: "",
+        knownFor: "",
+        sourceLinks: evidence.map((item) => ({ title: item.title, url: item.url }))
+      };
+    });
+  const interviewers = toProfiles(result.interviewers, "采访者")
+    .filter((person) => {
+      if (interviewerNames.has(person.name)) return false;
+      interviewerNames.add(person.name);
+      return true;
+    });
+  const interviewerSet = new Set(interviewers.map((person) => person.name));
+  const seenInterviewees = new Set();
+  const interviewees = toProfiles(result.interviewees, "被采访者")
+    .filter((person) => {
+      if (interviewerSet.has(person.name) || seenInterviewees.has(person.name)) return false;
+      seenInterviewees.add(person.name);
+      return true;
+    });
+  if (!interviewees.length) {
+    throw createError(
+      "INTERVIEW_PEOPLE_NOT_IDENTIFIED",
+      "暂时无法从标题和智能稿本中可靠识别被采访者，请稍后重试。"
+    );
+  }
+  return { interviewers, interviewees };
 }
 
 async function correctOverview(payload = {}) {
@@ -1541,73 +1642,65 @@ function deduplicateSearchResults(results, limit) {
 }
 
 async function generateFollowup(payload = {}) {
-  const overview = payload.overview || {};
-  const names = (Array.isArray(overview.interviewees)
+  let overview = payload.overview || {};
+  let identifiedPeople = null;
+  let names = ContentUtils.normalizeGuestNames(Array.isArray(overview.interviewees)
     ? overview.interviewees.map((person) => person.name)
     : [])
     .map(cleanFollowupSearchTerm)
-    .filter((name) => name.length >= 2)
-    .slice(0, 3);
+    .filter((name) => name.length >= 2);
+  if (!names.length) {
+    identifiedPeople = await identifyInterviewPeople(payload);
+    overview = { ...overview, ...identifiedPeople };
+    names = ContentUtils.normalizeGuestNames(
+      identifiedPeople.interviewees.map((person) => person.name)
+    );
+  }
   const topics = collectFollowupTopics(overview);
   const title = String(payload.video?.title || "").slice(0, 48);
-  const primarySubject = names[0] || cleanFollowupSearchTerm(title);
-  const biliQueries = deduplicateStrings([
-    `${primarySubject} 访谈`,
-    `${primarySubject} 对话`,
-    `${primarySubject} 播客`
-  ]).map((query) => query.slice(0, 48));
-  const webQueries = deduplicateStrings([
-    `${primarySubject} 深度访谈`,
-    `${primarySubject} 人物专访`,
-    topics[0] ? `${primarySubject} ${topics[0]}` : ""
-  ]).filter(Boolean).map((query) => query.slice(0, 70));
-  const videoBatches = await Promise.all(
-    biliQueries.map((query) =>
-      searchBilibiliVideos(query, 8).catch(() => [])
-    )
-  );
-  const webBatches = await Promise.all(
-    webQueries.map((query) => searchWeb(query, 10).catch(() => []))
-  );
-  const knowledgeBatches = await Promise.all(
-    names.map(async (name) => {
-      const results = await searchWeb(`"${name}" 百度百科`, 8).catch(() => []);
-      return results
-        .filter((item) => {
-          try {
-            const host = new URL(item.url).hostname.toLowerCase();
-            return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
-          } catch {
-            return false;
-          }
-        })
-        .map((item) => ({ ...item, media: "百度百科" }));
+  const subjects = names;
+  const candidateGroups = (await Promise.all(subjects.map((guestName) =>
+    collectFollowupCandidatesForGuest({
+      guestName,
+      topics,
+      title,
+      video: payload.video,
+      profile: (Array.isArray(overview.interviewees)
+        ? overview.interviewees
+        : []).find((person) =>
+          cleanFollowupSearchTerm(person?.name) === guestName
+        )
     })
+  ))).map((group, index) =>
+    ensureFollowupCategoryCoverage(group, subjects[index])
   );
-  const candidates = [];
-  const seen = new Set();
-  for (const item of [
-    ...videoBatches.flat(),
-    ...webBatches.flat().filter(isUsableResearchEvidence),
-    ...knowledgeBatches.flat()
-  ]) {
-    const relevanceScore = followupRelevanceScore(item, names, topics, title);
-    if (
-      !item.url ||
-      seen.has(item.url) ||
-      isCurrentVideoResult(item, payload.video) ||
-      isSearchLandingPage(item.url) ||
-      relevanceScore < 1
-    ) continue;
-    seen.add(item.url);
-    candidates.push({
-      ...item,
-      inferredType: inferFollowupType(item),
-      relevanceScore
-    });
+  const missingGuests = subjects.filter((_name, index) => !candidateGroups[index].length);
+  if (missingGuests.length) {
+    throw createError(
+      "FOLLOWUP_GUEST_RESULTS_MISSING",
+      `暂未检索到${missingGuests.join("、")}的可靠延伸资料，请稍后重试。`
+    );
   }
-  candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
-  candidates.splice(30);
+  const categoryGaps = subjects.map((name, index) => {
+    const group = candidateGroups[index];
+    const hasVideo = group.some((item) =>
+      item.inferredType === "podcast" || item.inferredType === "video"
+    );
+    const hasArticle = group.some((item) => item.inferredType === "article");
+    return {
+      name,
+      missing: [!hasVideo ? "视频" : "", !hasArticle ? "文章" : ""].filter(Boolean)
+    };
+  }).filter((item) => item.missing.length);
+  if (categoryGaps.length) {
+    throw createError(
+      "FOLLOWUP_GUEST_CATEGORY_MISSING",
+      `延伸资料仍不完整：${categoryGaps.map((item) =>
+        `${item.name}缺少${item.missing.join("和")}`
+      ).join("；")}。请稍后重试。`
+    );
+  }
+  const candidates = candidateGroups.flat();
   if (!candidates.length) {
     throw createError(
       "FOLLOWUP_NO_CONCRETE_RESULTS",
@@ -1615,6 +1708,15 @@ async function generateFollowup(payload = {}) {
     );
   }
 
+  const fallbackItems = candidates.map(followupItemFromCandidate);
+  const aiCandidates = candidates.filter((item) => !item.searchFallback);
+  if (!aiCandidates.length) {
+    return {
+      ok: true,
+      followup: buildCandidateFollowup(candidates, subjects, topics),
+      ...(identifiedPeople ? { people: identifiedPeople } : {})
+    };
+  }
   let result;
   try {
     result = await callAiJson({
@@ -1631,6 +1733,7 @@ async function generateFollowup(payload = {}) {
             type: "object",
             additionalProperties: false,
             properties: {
+              guestName: { type: "string", enum: subjects },
               title: { type: "string" },
               url: { type: "string" },
               type: {
@@ -1641,59 +1744,188 @@ async function generateFollowup(payload = {}) {
               why: { type: "string" },
               publishDate: { type: "string" }
             },
-            required: ["title", "url", "type", "source", "why", "publishDate"]
+            required: [
+              "guestName", "title", "url", "type", "source", "why", "publishDate"
+            ]
           }
         }
       },
       required: ["intro", "topics", "items"]
     },
     instructions:
-      "你是播客研究编辑。基于候选搜索结果，挑选6至12条最能帮助用户继续理解本期人物和主题的资料。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。结果优先保证2至5条相关视频播客，其次是其他视频，最后是文章。绝对不要推荐本期原视频。why 要具体说明与本期的连接。只能选择候选中真实存在的 URL，必须原样复制，绝不能编造链接。",
+      `你是播客研究编辑。候选资料已按被采访者标注 guestName。必须为${subjects.join("、")}每人分别挑选3至6条最能帮助用户继续理解该人物及本期主题的资料，而且每人至少包含1条 podcast 或 video 以及1条 article；不能只返回第一位嘉宾，不能把甲的资料归到乙名下。内容只分三类：podcast 是相关的视频播客、长访谈或对谈节目；video 是其他相关视频；article 是深度文章、人物资料或机构页面。优先选择本人或机构官方页面、政府与高校网站、公共知识库、权威媒体、知名出版物和主流视频平台，排除内容农场、采集站、标题党与信息来源不明的页面。绝对不要推荐本期原视频，也不要输出“原视频仅作占位”之类的项目。why 要具体说明资料与对应嘉宾及本期的连接。guestName 和 URL 必须逐字复制候选值，绝不能编造链接或改变归属。`,
     input: JSON.stringify({
       videoTitle: title,
-      interviewees: names,
+      interviewees: subjects,
       keyTopics: topics,
-      candidates
+      candidates: aiCandidates
     }),
     temperature: 0.2,
-    maxTokens: 3200
+    maxTokens: 4200
     });
   } catch {
     return {
       ok: true,
-      followup: buildCandidateFollowup(candidates, names, topics)
+      followup: buildCandidateFollowup(candidates, subjects, topics),
+      ...(identifiedPeople ? { people: identifiedPeople } : {})
     };
   }
-  const allowed = new Set(candidates.map((item) => item.url));
-  result.items = (Array.isArray(result.items) ? result.items : [])
-    .filter((item) => allowed.has(item.url))
+  const allowedPairs = new Set(aiCandidates.map((item) =>
+    `${item.guestName}\n${item.url}`
+  ));
+  const selectedItems = (Array.isArray(result.items) ? result.items : [])
+    .filter((item) => allowedPairs.has(`${item.guestName}\n${item.url}`))
     .map((item) => ({
       ...item,
       type: ["podcast", "video", "article"].includes(item.type)
         ? item.type
         : inferFollowupType(item)
     }))
-    .sort((a, b) => followupTypeRank(a.type) - followupTypeRank(b.type));
-  if (!result.items.length) {
-    result.items = candidates.slice(0, 10).map((item) => ({
-      title: item.title,
-      url: item.url,
-      type: item.inferredType || inferFollowupType(item),
-      source: item.media || "网页",
-      why: item.content.slice(0, 120),
-      publishDate: item.publishDate || ""
-    }));
-  }
-  result.items = result.items.filter((item) =>
-    item?.url && !isSearchLandingPage(item.url)
-  );
+    .filter((item) =>
+      item?.url &&
+      !isSearchLandingPage(item.url) &&
+      !isCurrentVideoResult(item, payload.video)
+    );
+  result.items = ContentUtils.balanceFollowupGuestItems(
+    selectedItems,
+    fallbackItems,
+    subjects,
+    4
+  ).sort((a, b) => {
+    const guestDifference = subjects.indexOf(a.guestName) - subjects.indexOf(b.guestName);
+    return guestDifference || followupTypeRank(a.type) - followupTypeRank(b.type);
+  });
   if (!result.items.length) {
     throw createError(
       "FOLLOWUP_NO_VERIFIED_RESULTS",
       "没有得到可验证的具体资料链接，结果未保存。"
     );
   }
-  return { ok: true, followup: result };
+  result.intro = String(result.intro ||
+    `已分别整理${subjects.join("、")}的延伸资料。`);
+  if (candidates.some((item) => item.searchFallback)) {
+    result.intro += " 部分分类暂未找到足够可靠的具体链接，已提供对应平台的搜索入口。";
+  }
+  result.topics = deduplicateStrings([
+    ...subjects,
+    ...(Array.isArray(result.topics) ? result.topics : []),
+    ...topics
+  ]).slice(0, 8);
+  return {
+    ok: true,
+    followup: result,
+    ...(identifiedPeople ? { people: identifiedPeople } : {})
+  };
+}
+
+async function collectFollowupCandidatesForGuest({
+  guestName,
+  topics,
+  title,
+  video,
+  profile = {}
+}) {
+  const biliQueries = deduplicateStrings([
+    `${guestName} 访谈`,
+    `${guestName} 对话 播客`
+  ]).map((query) => query.slice(0, 48));
+  const webQueries = deduplicateStrings([
+    `${guestName} 深度访谈`,
+    `${guestName} 人物专访`,
+    topics[0] ? `${guestName} ${topics[0]}` : ""
+  ]).filter(Boolean).map((query) => query.slice(0, 70));
+  const [videoBatches, videoWebResults, webBatches, knowledgeResults] = await Promise.all([
+    Promise.all(biliQueries.map((query) =>
+      searchBilibiliVideos(query, 8).catch(() => [])
+    )),
+    searchWeb(`${guestName} 访谈 视频`, 10, { domain: "bilibili.com" })
+      .catch(() => []),
+    Promise.all(webQueries.map((query) => searchWeb(query, 10).catch(() => []))),
+    searchWeb(`"${guestName}" 百度百科`, 8).catch(() => [])
+  ]);
+  const knowledge = knowledgeResults
+    .filter((item) => {
+      try {
+        const host = new URL(item.url).hostname.toLowerCase();
+        return host === "baike.baidu.com" || host.endsWith(".baike.baidu.com");
+      } catch {
+        return false;
+      }
+    })
+    .map((item) => ({ ...item, media: "百度百科" }));
+  const profileSources = (Array.isArray(profile?.sourceLinks)
+    ? profile.sourceLinks
+    : []).map((source) => ({
+      title: String(source?.title || `${guestName}人物资料`),
+      url: String(source?.url || ""),
+      content: `${guestName} ${profile?.bio || ""} ${profile?.knownFor || ""}`.trim(),
+      media: "人物资料",
+      publishDate: ""
+    }));
+  const candidates = [];
+  const seen = new Set();
+  for (const item of [
+    ...videoBatches.flat(),
+    ...videoWebResults,
+    ...webBatches.flat().filter(isUsableResearchEvidence),
+    ...knowledge,
+    ...profileSources
+  ]) {
+    const relevanceScore = followupRelevanceScore(item, [guestName], topics, title);
+    if (
+      !item.url ||
+      seen.has(item.url) ||
+      isCurrentVideoResult(item, video) ||
+      isSearchLandingPage(item.url) ||
+      relevanceScore < 1
+    ) continue;
+    seen.add(item.url);
+    candidates.push({
+      ...item,
+      guestName,
+      inferredType: inferFollowupType(item),
+      relevanceScore
+    });
+  }
+  candidates.sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a));
+  return candidates.slice(0, 18);
+}
+
+function ensureFollowupCategoryCoverage(candidates, guestName) {
+  const output = Array.isArray(candidates) ? [...candidates] : [];
+  const hasVideo = output.some((item) =>
+    item.inferredType === "podcast" || item.inferredType === "video"
+  );
+  const hasArticle = output.some((item) => item.inferredType === "article");
+  if (!hasVideo) {
+    const query = `${guestName} 访谈`;
+    output.push({
+      guestName,
+      title: `在 Bilibili 搜索“${query}”`,
+      content: `暂未检索到${guestName}可验证的具体视频，点击查看 Bilibili 的实时搜索结果。`,
+      url: `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`,
+      media: "Bilibili 搜索",
+      publishDate: "",
+      inferredType: "video",
+      relevanceScore: 1,
+      searchFallback: true
+    });
+  }
+  if (!hasArticle) {
+    const query = `${guestName} 人物专访`;
+    output.push({
+      guestName,
+      title: `在百度搜索“${query}”`,
+      content: `暂未检索到${guestName}可验证的具体文章，点击查看百度的实时搜索结果。`,
+      url: `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`,
+      media: "百度搜索",
+      publishDate: "",
+      inferredType: "article",
+      relevanceScore: 1,
+      searchFallback: true
+    });
+  }
+  return output;
 }
 
 function cleanFollowupSearchTerm(value) {
@@ -1754,21 +1986,11 @@ function isSearchLandingPage(value) {
 }
 
 function isCurrentVideoResult(item, video = {}) {
-  const currentBvid = String(video.bvid || "").toUpperCase();
-  const resultBvid = String(item.url || "")
-    .match(/\/video\/(BV[a-zA-Z0-9]+)/u)?.[1]
-    ?.toUpperCase() || "";
-  if (currentBvid && resultBvid === currentBvid) return true;
-  const currentTitle = normalizeComparableTitle(video.title);
-  const resultTitle = normalizeComparableTitle(item.title);
-  return Boolean(currentTitle && resultTitle && currentTitle === resultTitle);
+  return ContentUtils.shouldExcludeFollowupResult(item, video);
 }
 
 function normalizeComparableTitle(value) {
-  return String(value || "")
-    .replace(/<[^>]+>/gu, "")
-    .replace(/[\s|｜·•—–_《》“”"'：:，,。！？!?（）()【】\[\]]+/gu, "")
-    .toLocaleLowerCase();
+  return ContentUtils.normalizeComparableTitle(value);
 }
 
 async function searchBilibiliVideos(query, count = 8) {
@@ -1806,19 +2028,37 @@ function stripSearchMarkup(value) {
 }
 
 function buildCandidateFollowup(candidates, names, topics) {
+  const fallbackItems = [...candidates]
+    .sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a))
+    .map(followupItemFromCandidate);
   return {
-    intro: "已从 Bilibili 与公共知识来源找到以下延伸资料。",
-    topics: [...names, ...topics].filter(Boolean).slice(0, 6),
-    items: [...candidates]
-      .sort((a, b) => followupCandidateScore(b) - followupCandidateScore(a))
-      .slice(0, 10).map((item) => ({
-      title: item.title,
-      url: item.url,
-      type: item.inferredType || inferFollowupType(item),
-      source: item.media || "网页",
-      why: item.content?.slice(0, 140) || "与本期人物或话题相关。",
-      publishDate: item.publishDate || ""
-    }))
+    intro: `已分别整理${names.join("、")}的延伸资料。${
+      candidates.some((item) => item.searchFallback)
+        ? " 部分分类暂未找到足够可靠的具体链接，已提供对应平台的搜索入口。"
+        : ""
+    }`,
+    topics: [...names, ...topics].filter(Boolean).slice(0, 8),
+    items: ContentUtils.balanceFollowupGuestItems(
+      [],
+      fallbackItems,
+      names,
+      4
+    ).sort((a, b) => {
+      const guestDifference = names.indexOf(a.guestName) - names.indexOf(b.guestName);
+      return guestDifference || followupTypeRank(a.type) - followupTypeRank(b.type);
+    })
+  };
+}
+
+function followupItemFromCandidate(item = {}) {
+  return {
+    guestName: item.guestName,
+    title: item.title,
+    url: item.url,
+    type: item.inferredType || inferFollowupType(item),
+    source: item.media || "网页",
+    why: item.content?.slice(0, 140) || `与${item.guestName || "本期嘉宾"}相关。`,
+    publishDate: item.publishDate || ""
   };
 }
 
@@ -1956,21 +2196,48 @@ async function generateRemix(payload = {}) {
   const requestedStyle = String(payload.style || "profile");
   const style = allowedStyles.includes(requestedStyle) ? requestedStyle : "profile";
   const length = String(payload.length || "medium");
-  const people = payload.people || {};
-  const interviewees = (Array.isArray(people.interviewees)
-    ? people.interviewees
-    : []).map((name) => String(name || "").trim()).filter(Boolean);
+  let people = payload.people || {};
+  let interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
+  let identifiedPeople = null;
+  if (!interviewees.length) {
+    identifiedPeople = await identifyInterviewPeople(payload);
+    people = {
+      interviewers: identifiedPeople.interviewers.map((person) => person.name),
+      interviewees: identifiedPeople.interviewees.map((person) => person.name)
+    };
+    interviewees = ContentUtils.normalizeGuestNames(people.interviewees);
+  }
   const interviewers = (Array.isArray(people.interviewers)
     ? people.interviewers
     : []).map((name) => String(name || "").trim()).filter(Boolean);
-  const primaryGuest = interviewees[0] || "主要被采访者";
+  const requestedGuest = String(payload.selectedGuest || "")
+    .replace(/\s+/gu, "")
+    .trim();
+  if (
+    ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(style) &&
+    interviewees.length > 1 &&
+    !interviewees.includes(requestedGuest)
+  ) {
+    if (identifiedPeople) {
+      return {
+        ok: true,
+        selectionRequired: true,
+        people: identifiedPeople
+      };
+    }
+    throw createError("REMIX_GUEST_REQUIRED", "请选择要写作的嘉宾对象。");
+  }
+  const primaryGuest = interviewees.includes(requestedGuest)
+    ? requestedGuest
+    : interviewees[0] || "主要被采访者";
+  const allGuestsLabel = interviewees.join("、") || "主要被采访者";
   const styleInstructions = {
     profile:
       `你正在单独创作“人物特写”，中心人物是${primaryGuest}。文章回答“这个人如何在一连串选择与代价中成为今天的自己”。必须全程采用第三人称非虚构叙事，作者可以观察和分析，但不能冒充嘉宾说“我”。开篇从访谈中真实出现的一个场景、动作、语气、矛盾或决定切入，不写概括式导语；随后以2至4次关键选择或转折构成叙事弧线，把经历、性格张力、行动方式和代价交织起来，不能按年份罗列履历，也不能把观点逐条复述。每节必须既有可感知的具体经历，也有克制的第三人称解释；直接引语只能来自稿本。结尾回到人物尚未解决的问题、仍在坚持的价值或下一步处境。禁止使用自传口吻，禁止写成观点议论文。`,
     first_person:
       `你正在单独创作“嘉宾第一人称自述”，叙述者只能是${primaryGuest}。文章回答“我如何回望自己的经历、选择与代价”。从标题、导语到正文都要像嘉宾本人完成的一篇自传性文章：主体叙述持续使用“我”，不得出现“嘉宾认为”“他/她表示”“作为被采访者”等外部记者口吻，也不得把主持人${interviewers.join("、") || "的"}的问题或经历写成“我”的人生。按记忆触发、关键选择、遭遇的阻力、付出的代价、今天的理解组织出清晰时间流动，保留嘉宾的语言个性与情绪，但删除重复、口头禅和问答痕迹。只能改写嘉宾在稿本中明确表达的事实、感受和判断，绝不能代写其未说过的内心活动、动机、场景或结论。结尾必须是“我”对当下处境或未来选择的自我回答。禁止第三人称人物评价，禁止写成媒体人物特写。`,
     insight_essay:
-      `你正在单独创作“深度文章”。文章不是${primaryGuest}的生平介绍，也不是其第一人称自传，而是从访谈中选择一个最有解释力、最值得展开的核心观点或认知冲突，回答“这个观点在什么条件下成立，它解释了什么，又忽略了什么”。开篇提出一个具体问题或反常识判断；随后建立清楚的中心论点，每一节承担不同的论证任务，用${primaryGuest}在访谈中的经历、观点、细节和后果作为证据，而不是按时间讲完其人生。至少分析一处矛盾、限制条件、反例或可能的反对意见，再把个人经验推向更普遍的职业、关系、创作或社会观察。作者使用分析性第三人称，不冒充嘉宾说“我”，也不对人物作传记式赞颂。结尾给出有边界的结论或值得继续追问的问题，禁止鸡汤式升华和空泛总结。`
+      `你正在单独创作“深度文章”。文章不是${allGuestsLabel}中任何一人的生平介绍，也不是其第一人称自传，而是从整场访谈中选择一个最有解释力、最值得展开的核心观点或认知冲突，回答“这个观点在什么条件下成立，它解释了什么，又忽略了什么”。开篇提出一个具体问题或反常识判断；随后建立清楚的中心论点，每一节承担不同的论证任务，综合使用${allGuestsLabel}在访谈中的经历、观点、差异、细节和后果作为证据，而不是只围绕第一位嘉宾或按时间讲完某个人生。至少分析一处矛盾、限制条件、反例或可能的反对意见，再把个人经验推向更普遍的职业、关系、创作或社会观察。作者使用分析性第三人称，不冒充嘉宾说“我”，也不对人物作传记式赞颂。结尾给出有边界的结论或值得继续追问的问题，禁止鸡汤式升华和空泛总结。`
   };
   const lengthTargets = {
     short: "约800至1200字",
@@ -2014,6 +2281,9 @@ async function generateRemix(payload = {}) {
     input: JSON.stringify({
       taskMode: style,
       primaryGuest,
+      selectedGuest: ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(style)
+        ? primaryGuest
+        : "",
       interviewees,
       interviewers,
       videoTitle: payload.video?.title || "",
@@ -2030,7 +2300,11 @@ async function generateRemix(payload = {}) {
       length
     )
   });
-  return { ok: true, remix: result };
+  return {
+    ok: true,
+    remix: result,
+    ...(identifiedPeople ? { people: identifiedPeople } : {})
+  };
 }
 
 function remixValidationIssues(result, style, length) {

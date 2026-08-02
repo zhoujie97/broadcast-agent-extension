@@ -12,7 +12,7 @@ for (const stalePanel of document.querySelectorAll("#podcast-reader-floating-pan
 }
 
 let observedVideo = null;
-let lastReportedSecond = -1;
+let lastReportedTick = -1;
 let noteOverlay = null;
 let noteOverlayPosition = null;
 let floatingPanel = null;
@@ -66,25 +66,33 @@ async function toggleFloatingPanel() {
 async function createFloatingPanel() {
   const stored = await chrome.storage.local.get("floatingPanelState");
   const state = stored.floatingPanelState || {};
-  const hasSavedPosition = state.layoutVersion === 2;
+  const hasSavedPosition = state.layoutVersion === 3;
   const viewportWidth = Math.max(320, window.innerWidth);
-  const viewportHeight = Math.max(480, window.innerHeight);
+  const viewportHeight = Math.max(1, window.innerHeight);
   const maxPanelWidth = Math.max(296, viewportWidth - 24);
   const minPanelWidth = Math.min(480, maxPanelWidth);
   const width = clamp(Number(state.width) || 640, minPanelWidth, maxPanelWidth);
+  const savedTop = Number(state.top);
+  const top = hasSavedPosition && Number.isFinite(savedTop)
+    ? clamp(savedTop, 0, Math.max(0, viewportHeight - 120))
+    : 0;
+  const availableHeight = Math.max(1, viewportHeight - top);
+  const minPanelHeight = Math.min(420, availableHeight);
   const height = clamp(
-    Number(state.height) || Math.round(viewportHeight * 0.86),
-    420,
-    Math.max(420, viewportHeight - 24)
+    hasSavedPosition && Number(state.height) > 0
+      ? Number(state.height)
+      : availableHeight,
+    minPanelHeight,
+    availableHeight
   );
   const host = document.createElement("div");
   host.id = "podcast-reader-floating-panel";
   host.style.cssText = [
     "position:fixed",
-    `top:${hasSavedPosition ? clamp(Number(state.top) || 12, 12, Math.max(12, viewportHeight - 120)) : 12}px`,
+    `top:${top}px`,
     hasSavedPosition && Number.isFinite(Number(state.left))
-      ? `left:${clamp(Number(state.left), 12, Math.max(12, viewportWidth - width - 12))}px`
-      : "right:12px",
+      ? `left:${clamp(Number(state.left), 0, Math.max(0, viewportWidth - width))}px`
+      : "right:0",
     `width:${width}px`,
     `height:${height}px`,
     "z-index:2147483647",
@@ -395,7 +403,7 @@ async function persistFloatingPanelState(patch) {
   await chrome.storage.local.set({
     floatingPanelState: {
       ...(stored.floatingPanelState || {}),
-      layoutVersion: 2,
+      layoutVersion: 3,
       ...patch
     }
   });
@@ -451,18 +459,33 @@ function keepFloatingPanelInViewport() {
 function findVideo() {
   const videos = [...document.querySelectorAll("video")];
   if (!videos.length) return null;
-  return videos
-    .map((video) => {
-      const rect = video.getBoundingClientRect();
-      const area = Math.max(0, rect.width) * Math.max(0, rect.height);
-      const score =
-        area +
-        (video.readyState > 0 ? 1_000_000 : 0) +
-        (!video.paused ? 2_000_000 : 0) +
-        (video.currentTime > 0 ? 500_000 : 0);
-      return { video, score };
-    })
-    .sort((a, b) => b.score - a.score)[0].video;
+  const candidates = videos.map((video) => {
+    const rect = video.getBoundingClientRect();
+    const style = window.getComputedStyle(video);
+    const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+    const visible =
+      area >= 10_000 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity || 1) > 0;
+    return { video, area, visible };
+  });
+  const visibleCandidates = candidates.filter((item) => item.visible);
+  const pool = visibleCandidates.length ? visibleCandidates : candidates;
+  const playing = pool.filter((item) =>
+    !item.video.paused && !item.video.ended && item.video.readyState > 0
+  );
+  if (playing.length) {
+    const observedPlaying = playing.find((item) => item.video === observedVideo);
+    if (observedPlaying) return observedPlaying.video;
+    return playing.sort((a, b) => b.area - a.area)[0].video;
+  }
+  const stable = pool.find((item) => item.video === observedVideo);
+  if (stable) return stable.video;
+  return pool.sort((a, b) =>
+    Number(b.video.readyState > 0) - Number(a.video.readyState > 0) ||
+    b.area - a.area
+  )[0].video;
 }
 
 async function seekVideo(seconds) {
@@ -571,7 +594,7 @@ function attachPlaybackObserver(video) {
     }
   }
   observedVideo = video;
-  lastReportedSecond = -1;
+  lastReportedTick = -1;
   for (const event of ["timeupdate", "play", "seeked", "loadedmetadata"]) {
     observedVideo.addEventListener(event, reportPlaybackTime);
   }
@@ -582,9 +605,9 @@ function attachPlaybackObserver(video) {
 function reportPlaybackTime(force = false) {
   const video = observedVideo || findVideo();
   if (!video) return;
-  const wholeSecond = Math.floor(Number(video.currentTime) || 0);
-  if (!force && wholeSecond === lastReportedSecond) return;
-  lastReportedSecond = wholeSecond;
+  const playbackTick = Math.floor((Number(video.currentTime) || 0) * 4);
+  if (!force && playbackTick === lastReportedTick) return;
+  lastReportedTick = playbackTick;
   safeRuntimeSend({
     type: "PLAYBACK_TIME",
     seconds: Number(video.currentTime) || 0,
@@ -799,33 +822,16 @@ function ensureNoteOverlay() {
     }
     message.textContent = `已保存 ${formatTime(seconds)}`;
     textarea.value = "";
-    window.setTimeout(() => {
-      editor.hidden = true;
-      message.textContent = "";
-    }, 800);
   });
   overlay.querySelector('[data-action="close-answer"]').addEventListener("click", () => {
     answerCard.hidden = true;
   });
-  let hideOverlayTimer = null;
   let fadeOverlayTimer = null;
   overlay.addEventListener("mouseenter", () => {
-    window.clearTimeout(hideOverlayTimer);
     window.clearTimeout(fadeOverlayTimer);
     overlay.classList.remove("idle");
   });
   overlay.addEventListener("mouseleave", () => {
-    window.clearTimeout(hideOverlayTimer);
-    hideOverlayTimer = window.setTimeout(() => {
-      if (overlay.matches(":hover") || submitButton.disabled) return;
-      editor.hidden = true;
-      answerCard.hidden = true;
-      const focusedElement = document.activeElement;
-      if (focusedElement && overlay.contains(focusedElement)) {
-        focusedElement.blur();
-      }
-      trigger.setAttribute("aria-expanded", "false");
-    }, 180);
     window.clearTimeout(fadeOverlayTimer);
     fadeOverlayTimer = window.setTimeout(() => {
       if (!overlay.matches(":hover")) overlay.classList.add("idle");

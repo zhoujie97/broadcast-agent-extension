@@ -310,7 +310,7 @@ export function normalizeDeepSeekWebSearchResponse(payload, count = 10) {
       seenUrls.add(link);
       results.push({
         title: String(item.title || "未命名结果"),
-        content: String(item.snippet || item.content || ""),
+        content: String(item.snippet || item.content || item.title || ""),
         link,
         media: String(item.source || ""),
         publish_date: String(item.page_age || item.publish_date || "")
