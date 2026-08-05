@@ -3,8 +3,10 @@
 一款面向 Bilibili 访谈、播客和长视频的 Edge 浏览器扩展。它可以读取视频字幕并生成智能稿本、内容地图、高光切片、人物资料、知识笔记和深度文章。
 
 ![](效果图/智能稿本.png)
-当前扩展版本：`v1.0.16`
+当前扩展版本：`v1.0.18`
 
+- [v1.0.18 版本说明](docs/v1.0.18-release-notes.md)
+- [v1.0.17 版本说明](docs/v1.0.17-release-notes.md)
 - [v1.0.16 版本说明](docs/v1.0.16-release-notes.md)
 - [v1.0.15 版本说明](docs/v1.0.15-release-notes.md)
 - [扩展完整使用说明](extension/README.md)
@@ -57,7 +59,7 @@
 </div>
 
 
-- AI Key 只保存在服务端，扩展使用 Vercel HTTPS 代理
+- 开发者 Key 只保存在服务端；用户可选择在自己的浏览器中保存个人 DeepSeek Key
 
 ## 普通用户安装
 
@@ -80,7 +82,7 @@
 npm install
 
 API_BASE_URL=https://broadcast-agent-extension.vercel.app \
-RELEASE_VERSION=1.0.16 \
+RELEASE_VERSION=1.0.18 \
 npm run package:extension
 ```
 
@@ -109,10 +111,11 @@ Vercel 至少需要配置：
 AI_MODEL=deepseek-v4-flash
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 SESSION_SIGNING_SECRET=至少 24 字符的随机字符串
-ALLOWED_EXTENSION_ORIGINS=chrome-extension://你的正式扩展ID
+ALLOWED_EXTENSION_ORIGINS=chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe,chrome-extension://mdfjbiaoihgoamlkhjbhadmdocofhihp
+FREE_DAILY_CALLS_PER_FEATURE=2
 ```
 
-修改 Vercel 环境变量后需要重新部署。侧载测试可临时将 `ALLOWED_EXTENSION_ORIGINS` 设置为 `chrome-extension://*`；正式发布后应改为商店分配的固定扩展 ID。完整流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+修改 Vercel 环境变量后需要重新部署。当前 Edge 商店版运行时 ID 为 `bfgmhgfjfhckjblpnhpmmeinecpceihe`，本仓库 `dist/extension` 测试副本当前为 `mdfjbiaoihgoamlkhjbhadmdocofhihp`，因此验收期间需要同时允许两个 Origin。虽然只发布到 Edge，Chromium 内核的扩展 Origin 仍使用 `chrome-extension://`。Partner Center 中类似 `de7c88a5-3b71-49f6-8da9-3d89623c5531` 的 GUID 是商店产品 ID，不能用于 Origin 白名单。完整流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ## 本地验证
 
@@ -125,7 +128,7 @@ npm run check
 
 - 不读取、保存或上传 Bilibili `SESSDATA`
 - 只有用户主动使用 AI 功能时，相关字幕和问题才会发送到代理
-- API Key 不写入扩展源码或安装包
+- 开发者 API Key 不写入扩展源码或安装包；用户 Key 只由其浏览器保存
 - 笔记、稿本修正和生成结果保存在浏览器本地，并按视频隔离
 
 ## 已知限制

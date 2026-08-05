@@ -15,6 +15,22 @@
       .test(name);
   }
 
+  function normalizeLifePeriod(value) {
+    const period = String(value || "")
+      .replace(/\s+/gu, "")
+      .replace(/^[,，.。:：;；、\-—–]+|[,，.。:：;；、\-—–]+$/gu, "")
+      .trim();
+    if (
+      !period ||
+      /^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定|阶段未明|时间不详)$/u.test(period) ||
+      /^(?:年)?(?:0?[1-9]|1[0-2])月(?:0?[1-9]|[12]\d|3[01])日?$/u.test(period) ||
+      /^(?:年)?(?:0?[1-9]|1[0-2])月$/u.test(period)
+    ) {
+      return "";
+    }
+    return period;
+  }
+
   function remixCacheScope(style, length, guestName) {
     const normalizedStyle = String(style || "profile");
     const normalizedLength = String(length || "medium");
@@ -170,6 +186,7 @@
     PERSON_SPECIFIC_REMIX_STYLES,
     normalizeGuestNames,
     isPlausiblePersonName,
+    normalizeLifePeriod,
     remixCacheScope,
     balanceFollowupGuestItems,
     normalizeComparableTitle,

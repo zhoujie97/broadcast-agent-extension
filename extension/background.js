@@ -3,14 +3,34 @@ importScripts("person-utils.js", "content-utils.js", "stream-utils.js");
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
   // Production builds should replace this with the deployed HTTPS proxy URL.
-  // The proxy keeps provider API keys on the server; never put a key here.
+  // Never hard-code developer or user API keys in the extension source.
   proxyUrl: "http://127.0.0.1:8787/v1/chat/completions",
   defaultMaxTokens: 4096
 });
 const PROXY_INSTALLATION_KEY = "proxyInstallationId";
 const PROXY_SESSION_KEY = "proxyAnonymousSession";
+const DEEPSEEK_USER_KEY_LOCAL = "deepseekUserApiKey";
+const DEEPSEEK_USER_KEY_SESSION = "deepseekUserApiKeySession";
 const WEB_SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
 const pendingWebSearches = new Map();
+
+const storageAccessReady = Promise.all([
+  setStorageAccessLevel(
+    chrome.storage.local,
+    "TRUSTED_AND_UNTRUSTED_CONTEXTS"
+  ),
+  setStorageAccessLevel(chrome.storage.session, "TRUSTED_CONTEXTS")
+]);
+
+function setStorageAccessLevel(storageArea, accessLevel) {
+  try {
+    return Promise.resolve(
+      storageArea?.setAccessLevel?.({ accessLevel })
+    ).catch(() => {});
+  } catch {
+    return Promise.resolve();
+  }
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.remove("aiConfig").catch(() => {});
@@ -24,17 +44,63 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab?.id || !SUPPORTED_VIDEO_URL.test(tab.url || "")) return;
+  if (!tab?.id || !SUPPORTED_VIDEO_URL.test(tab.url || "")) {
+    if (tab?.id) {
+      await showActionError(tab.id, "请先打开普通的 Bilibili BV 视频页面。");
+    }
+    return;
+  }
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_FLOATING_PANEL" });
-  } catch {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["content.js"]
-    });
-    await chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_FLOATING_PANEL" });
+    await storageAccessReady;
+    await togglePanelInTab(tab.id);
+    await clearActionError(tab.id);
+  } catch (firstError) {
+    console.warn("首次打开悬浮面板失败，正在重新注入页面脚本。", firstError);
+    try {
+      await storageAccessReady;
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content.js"]
+      });
+      await togglePanelInTab(tab.id);
+      await clearActionError(tab.id);
+    } catch (error) {
+      console.error("无法打开悬浮面板。", error);
+      await showActionError(
+        tab.id,
+        `无法打开播客智能阅读助手：${error?.message || "未知错误"}`
+      );
+    }
   }
 });
+
+async function togglePanelInTab(tabId) {
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: "TOGGLE_FLOATING_PANEL"
+  });
+  if (!response?.ok) {
+    throw createError(
+      response?.error?.code || "PANEL_OPEN_FAILED",
+      response?.error?.message || "页面脚本没有成功打开悬浮面板。"
+    );
+  }
+  return response;
+}
+
+async function showActionError(tabId, message) {
+  await Promise.all([
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#a8433b" }),
+    chrome.action.setBadgeText({ tabId, text: "!" }),
+    chrome.action.setTitle({ tabId, title: message })
+  ]).catch(() => {});
+}
+
+async function clearActionError(tabId) {
+  await Promise.all([
+    chrome.action.setBadgeText({ tabId, text: "" }),
+    chrome.action.setTitle({ tabId, title: "播客智能阅读助手" })
+  ]).catch(() => {});
+}
 
 async function removeLegacyTranscriptAiCaches() {
   const [localValues, sessionValues] = await Promise.all([
@@ -121,6 +187,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "GET_AI_STATUS") {
     getAiServiceStatus()
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
+  if (message?.type === "GET_DEEPSEEK_KEY_STATUS") {
+    getDeepSeekKeyStatus()
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
+  if (message?.type === "SAVE_DEEPSEEK_KEY") {
+    saveDeepSeekUserKey(message.apiKey, message.remember === true)
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
+  if (message?.type === "CLEAR_DEEPSEEK_KEY") {
+    clearDeepSeekUserKey()
+      .then(sendResponse)
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
+  if (message?.type === "TEST_DEEPSEEK_KEY") {
+    testDeepSeekUserKey(message.apiKey)
       .then(sendResponse)
       .catch((error) => sendResponse(toFailure(error)));
     return true;
@@ -264,6 +358,91 @@ async function getAiServiceStatus() {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function normalizeDeepSeekUserKey(value) {
+  const apiKey = String(value || "").trim();
+  if (!/^sk-[a-zA-Z0-9_-]{8,240}$/u.test(apiKey)) {
+    throw createError("INVALID_USER_API_KEY", "请输入有效的 DeepSeek API Key（以 sk- 开头）。");
+  }
+  return apiKey;
+}
+
+async function getDeepSeekUserKey() {
+  const [session, local] = await Promise.all([
+    chrome.storage.session.get(DEEPSEEK_USER_KEY_SESSION),
+    chrome.storage.local.get(DEEPSEEK_USER_KEY_LOCAL)
+  ]);
+  return String(
+    session[DEEPSEEK_USER_KEY_SESSION] || local[DEEPSEEK_USER_KEY_LOCAL] || ""
+  ).trim();
+}
+
+async function getDeepSeekKeyStatus() {
+  const [session, local] = await Promise.all([
+    chrome.storage.session.get(DEEPSEEK_USER_KEY_SESSION),
+    chrome.storage.local.get(DEEPSEEK_USER_KEY_LOCAL)
+  ]);
+  const sessionKey = String(session[DEEPSEEK_USER_KEY_SESSION] || "");
+  const localKey = String(local[DEEPSEEK_USER_KEY_LOCAL] || "");
+  const apiKey = sessionKey || localKey;
+  return {
+    ok: true,
+    configured: Boolean(apiKey),
+    storage: sessionKey ? "session" : localKey ? "local" : "",
+    masked: apiKey ? `sk-••••${apiKey.slice(-4)}` : ""
+  };
+}
+
+async function saveDeepSeekUserKey(value, remember) {
+  const apiKey = normalizeDeepSeekUserKey(value);
+  if (remember) {
+    await chrome.storage.local.set({ [DEEPSEEK_USER_KEY_LOCAL]: apiKey });
+    await chrome.storage.session.remove(DEEPSEEK_USER_KEY_SESSION);
+  } else {
+    await chrome.storage.session.set({ [DEEPSEEK_USER_KEY_SESSION]: apiKey });
+    await chrome.storage.local.remove(DEEPSEEK_USER_KEY_LOCAL);
+  }
+  return getDeepSeekKeyStatus();
+}
+
+async function clearDeepSeekUserKey() {
+  await Promise.all([
+    chrome.storage.local.remove(DEEPSEEK_USER_KEY_LOCAL),
+    chrome.storage.session.remove(DEEPSEEK_USER_KEY_SESSION)
+  ]);
+  return { ok: true, configured: false, storage: "", masked: "" };
+}
+
+async function testDeepSeekUserKey(value) {
+  const apiKey = normalizeDeepSeekUserKey(value);
+  const session = await getProxySession();
+  const response = await fetch(AI_CONFIG.proxyUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.token}`,
+      "X-Installation-ID": session.installationId,
+      "X-AI-Feature": "key_test",
+      "X-AI-Action-ID": crypto.randomUUID().replace(/-/gu, ""),
+      "X-DeepSeek-API-Key": apiKey,
+      "X-Request-ID": crypto.randomUUID()
+    },
+    body: JSON.stringify({
+      messages: [{ role: "user", content: "只回复 OK" }],
+      temperature: 0,
+      max_tokens: 4,
+      stream: false
+    })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw createError(
+      "DEEPSEEK_KEY_TEST_FAILED",
+      payload?.error?.message || `DeepSeek Key 验证失败（HTTP ${response.status}）。`
+    );
+  }
+  return { ok: true };
 }
 
 function getVideoCacheKey(video) {
@@ -455,7 +634,7 @@ async function generateOverview(payload = {}) {
       ]
     },
     instructions:
-      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 只能包含 interviewees 中的被采访者，绝对不能为主持人、采访者或其他被提及人物生成轨迹；即使访谈谈到采访者的人生，也必须忽略。人生轨迹不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者最多生成一条轨迹，在信息充分时给出4至8个事件，personName 必须逐字复制 interviewees 中对应姓名，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词；period 绝不能返回单独的‘年’‘月’‘日’‘时期’或‘阶段’，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
+      "你是资深播客编辑与人物叙事研究者。请把完整访谈重组为内容地图，并严格区分三种信息结构。第一，chapters 是节目时间线：按 from 递增，边界只能取自原声文稿已有时间戳，建议6至12章；每章 title 是8至18字的主题题目，insight 是35至70字的一句话提炼，必须说清该章最重要的判断或矛盾，不能只是内容预告；content 是120至240字的主要内容，用一段完整自然的中文说明论证过程、经验和结论，不分点、不编号、不使用项目符号。第二，lifeTrajectories 只能包含 interviewees 中的被采访者，绝对不能为主持人、采访者或其他被提及人物生成轨迹；即使访谈谈到采访者的人生，也必须忽略。人生轨迹不按节目顺序，而按童年、求学、入行、转型、低谷、突破、当下等生命阶段或有可靠证据的年份排序；每位主要被采访者最多生成一条轨迹，在信息充分时给出4至8个事件，personName 必须逐字复制 interviewees 中对应姓名，overview 用一句话概括其人生轨迹，turningPoint 只标记真正改变后续方向的节点。事件若在访谈中明确出现，mentionedAt 使用对应原声文稿时间戳；仅由搜索材料支持时填-1。不得编造年份、经历或因果关系，年份不确定时使用‘职业早期’‘转型阶段’等阶段词；日历月份必须同时包含四位年份，不得返回‘9月’或‘年9月’等缺少年份的时间；period 绝不能返回单独的‘年’‘月’‘日’‘时期’或‘阶段’，资料不足时 events 返回空数组。第三，thoughtFragments 是从具体人物和事件中抽离出的5至8条思想碎片：每条 statement 必须是脱离上下文仍成立、具有解释力的完整观点或陈述，35至80字，尽量包含条件、张力、因果或方法，不得以任何人名、‘他、她、我、他们、嘉宾、主持人’等人物或代词作主语，不得写成‘某某认为’‘某某提到’，也不能只是漂亮但空泛的鸡汤；优先使用‘真正的…’‘当…时…’‘一种选择的代价是…’等能够独立传播的观点结构。lens 用2至6字标记观察角度，如成长、选择、创作、职业、关系、方法论或社会观察。oneLiner 用一句话说明本期最值得看的原因；summary 用150至300字概括主线。必须区分采访者与被采访者：interviewers 只列提问或主持采访的人，interviewees 只列主要回答问题的人。视频标题和 publisher 中的人名采用原字，严禁写成同音字；当字幕与标题冲突时以标题为准。人物简介可以参考搜索结果但不得猜测；sourceLinks 的 URL 必须逐字使用搜索候选中的 URL。不要输出 Markdown 星号。",
     input: JSON.stringify({
       videoTitle,
       publisher: payload.video?.publisher || "",
@@ -1380,6 +1559,8 @@ function nearestTranscriptTime(value, existingTimes) {
 function stripUnsupportedYears(value, evidenceText) {
   return String(value || "")
     .replace(/((?:乘风|浪姐)\s*)20\d{2}/gu, "$1")
+    .replace(/((?:19|20)\d{2})年(?:\s*\d{1,2}月(?:\s*\d{1,2}日)?)?/gu,
+      (date, year) => evidenceText.includes(year) ? date : "")
     .replace(/(?:19|20)\d{2}/gu, (year) => evidenceText.includes(year) ? year : "")
     .replace(/\s+》/gu, "》")
     .replace(/[ ]{2,}/gu, " ")
@@ -1387,17 +1568,7 @@ function stripUnsupportedYears(value, evidenceText) {
 }
 
 function normalizeLifePeriod(value) {
-  const period = String(value || "")
-    .replace(/\s+/gu, "")
-    .replace(/^[,，.。:：;；、\-—–]+|[,，.。:：;；、\-—–]+$/gu, "")
-    .trim();
-  if (
-    !period ||
-    /^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定|阶段未明|时间不详)$/u.test(period)
-  ) {
-    return "";
-  }
-  return period;
+  return ContentUtils.normalizeLifePeriod(value);
 }
 
 async function enrichMissingLifePeriods(overview, existingEvidence = []) {
@@ -2688,6 +2859,7 @@ async function callAiJson({
   maxTokens = AI_CONFIG.defaultMaxTokens,
   validateResult
 }) {
+  const actionId = crypto.randomUUID().replace(/-/gu, "");
   const streamReporter = createAiStreamReporter(schemaName);
   const systemPrompt =
     `${instructions}\n你必须只返回一个符合以下 JSON Schema 的纯 JSON 对象。` +
@@ -2705,6 +2877,7 @@ async function callAiJson({
     maxTokens,
     enforceJson: true,
     feature: schemaName,
+    actionId,
     onStream: streamReporter
   });
   let outputText = extractChatCompletionText(payload);
@@ -2745,6 +2918,7 @@ async function callAiJson({
     maxTokens,
     enforceJson: true,
     feature: schemaName,
+    actionId,
     onStream: streamReporter
   });
   outputText = extractChatCompletionText(payload);
@@ -2792,6 +2966,7 @@ async function requestAiProxyCompletion({
   maxTokens,
   enforceJson,
   feature,
+  actionId,
   onStream
 }) {
   const sendWithTransportFallback = async (jsonMode) => {
@@ -2802,18 +2977,27 @@ async function requestAiProxyCompletion({
         maxTokens,
         enforceJson: jsonMode,
         feature,
+        actionId,
         onStream,
         stream: true
       });
     } catch (error) {
       if (error?.code !== "AI_PROXY_INVALID_RESPONSE") throw error;
-      onStream?.({ fallback: true, receivedCharacters: 0, done: false });
+      onStream?.({
+        fallback: true,
+        fallbackReason: String(
+          error?.details?.cause || error?.message || ""
+        ).slice(0, 160),
+        receivedCharacters: 0,
+        done: false
+      });
       return sendAiProxyRequest({
         messages,
         temperature,
         maxTokens,
         enforceJson: jsonMode,
         feature,
+        actionId,
         onStream,
         stream: false
       });
@@ -2848,6 +3032,7 @@ async function sendAiProxyRequest({
   maxTokens,
   enforceJson,
   feature,
+  actionId,
   onStream,
   stream = true
 }) {
@@ -2856,7 +3041,8 @@ async function sendAiProxyRequest({
     response = await proxyFetch(AI_CONFIG.proxyUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-AI-Action-ID": actionId
       },
       body: JSON.stringify({
         messages,
@@ -3006,7 +3192,8 @@ function createAiStreamReporter(feature) {
       feature,
       receivedCharacters: Number(progress.receivedCharacters) || 0,
       done: progress.done === true,
-      fallback: progress.fallback === true
+      fallback: progress.fallback === true,
+      fallbackReason: String(progress.fallbackReason || "").slice(0, 160)
     };
     chrome.runtime.sendMessage(message).catch(() => {});
     if (feature === "podcast_answer") {
@@ -3036,6 +3223,8 @@ async function proxyFetch(url, options = {}, feature = "unknown", retry = true) 
   headers.set("X-Installation-ID", session.installationId);
   headers.set("X-AI-Feature", feature);
   headers.set("X-Request-ID", crypto.randomUUID());
+  const userApiKey = await getDeepSeekUserKey();
+  if (userApiKey) headers.set("X-DeepSeek-API-Key", userApiKey);
   const response = await fetch(url, { ...options, headers });
   if (response.status === 401 && retry) {
     await chrome.storage.local.remove(PROXY_SESSION_KEY);

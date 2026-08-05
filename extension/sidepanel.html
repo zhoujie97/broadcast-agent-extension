@@ -40,7 +40,29 @@
           <span id="ai-config-state" class="config-state configured">云端 AI</span>
         </summary>
         <div class="ai-settings-content">
-          <p class="secondary ai-help">内容地图、智能稿本、高光切片、内容重构、知识笔记和延伸探索共用同一个模型入口。使用 AI 时，相关字幕会发送到云端。</p>
+          <section class="deepseek-key-settings" aria-labelledby="deepseek-key-title">
+            <div>
+              <h3 id="deepseek-key-title">DeepSeek API Key</h3>
+              <p class="secondary">每个功能每天免费 2 次；配置 Key 后使用你的 DeepSeek 账户。</p>
+            </div>
+            <form id="deepseek-key-form">
+              <label class="field" for="deepseek-key-input">
+                <span>API Key</span>
+                <input id="deepseek-key-input" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="sk-…" required>
+              </label>
+              <label class="deepseek-key-remember">
+                <input id="deepseek-key-remember" type="checkbox">
+                <span>在此设备记住</span>
+              </label>
+              <div class="deepseek-key-actions">
+                <button id="test-deepseek-key-button" type="button">测试 Key</button>
+                <button id="save-deepseek-key-button" type="submit">保存并使用</button>
+                <button id="clear-deepseek-key-button" class="danger-text-button" type="button" hidden>删除 Key</button>
+              </div>
+            </form>
+            <p id="deepseek-key-status" class="secondary deepseek-key-status" aria-live="polite">未配置，当前使用免费额度。</p>
+            <p class="deepseek-key-links"><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">创建 DeepSeek API Key</a><a href="https://platform.deepseek.com/top_up" target="_blank" rel="noreferrer">充值 DeepSeek 账户</a></p>
+          </section>
           <div class="privacy-actions">
             <button id="review-ai-consent-button" type="button">数据使用说明</button>
             <button id="revoke-ai-consent-button" type="button" hidden>撤回 AI 授权</button>
@@ -53,15 +75,15 @@
       </details>
 
       <nav id="workspace-tabs" class="workspace-tabs" aria-label="内容工作区" hidden>
-        <button class="workspace-tab active" type="button" data-panel="overview-panel">内容地图</button>
-        <button class="workspace-tab" type="button" data-panel="transcript-panel">智能稿本</button>
+        <button class="workspace-tab active" type="button" data-panel="transcript-panel">智能稿本</button>
+        <button class="workspace-tab" type="button" data-panel="overview-panel">内容地图</button>
         <button class="workspace-tab" type="button" data-panel="clips-panel">高光切片</button>
         <button class="workspace-tab" type="button" data-panel="remix-panel">内容重构</button>
         <button class="workspace-tab" type="button" data-panel="notes-panel">知识笔记 <span id="note-count" class="tab-count">0</span></button>
         <button class="workspace-tab" type="button" data-panel="followup-panel">延伸探索</button>
       </nav>
 
-      <section id="transcript-panel" class="workspace-panel" hidden>
+      <section id="transcript-panel" class="workspace-panel">
         <div class="module-hero compact">
           <p class="module-eyebrow">SMART TRANSCRIPT</p>
           <h2>智能稿本</h2>
@@ -98,7 +120,7 @@
         <button id="back-to-top-button" class="back-to-top-button" type="button" hidden aria-label="返回顶部">↑ 返回顶部</button>
       </section>
 
-      <section id="overview-panel" class="workspace-panel">
+      <section id="overview-panel" class="workspace-panel" hidden>
         <div class="module-hero">
           <p class="module-eyebrow">CONTENT MAP</p>
           <h2>内容地图</h2>
@@ -280,6 +302,21 @@
       </form>
     </dialog>
 
+    <dialog id="quota-dialog" class="consent-dialog quota-dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="dialog-kicker">FREE LIMIT</p>
+          <h2>今日免费额度已用完</h2>
+        </div>
+        <button id="close-quota-dialog-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p id="quota-dialog-message" class="quota-dialog-message">该功能每天可免费使用 2 次。你可以明天继续使用，或者填写自己的 DeepSeek API Key。</p>
+      <div class="dialog-actions">
+        <button id="later-quota-button" type="button">稍后再说</button>
+        <button id="configure-key-button" class="primary-action" type="button">填写自己的 Key</button>
+      </div>
+    </dialog>
+
     <dialog id="ai-consent-dialog" class="consent-dialog">
       <div class="dialog-header">
         <div>
@@ -290,7 +327,7 @@
       </div>
       <div class="consent-copy">
         <p>为了生成内容地图、高光切片、内容重构、问答、纠错和延伸探索，插件会把当前视频标题、相关字幕片段以及你的问题或纠错反馈发送到我们的 HTTPS AI 代理，再由代理调用当前配置的 AI 模型。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
-        <p>AI 结果和知识笔记默认保存在本机浏览器中。你可以随时撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
+        <p>AI 结果和知识笔记默认保存在本机浏览器中。你也可以填写自己的 DeepSeek API Key；Key 只由浏览器保存，调用时经 HTTPS 临时发送，代理不会持久化或记录。你可以随时删除 Key、撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
         <p><a href="privacy.html" target="_blank" rel="noreferrer">查看完整隐私说明</a></p>
       </div>
       <div class="dialog-actions">

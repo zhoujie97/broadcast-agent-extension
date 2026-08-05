@@ -4,21 +4,50 @@ import test from "node:test";
 process.env.VERCEL = "1";
 const {
   isOriginAllowed,
+  normalizeUserApiKey,
   normalizeDeepSeekWebSearchResponse,
-  normalizeSearchDomain
+  normalizeSearchDomain,
+  quotaFeatureForRequest
 } = await import("../proxy/server.mjs");
 
 test("allows an exact published extension Origin", () => {
   assert.equal(isOriginAllowed(
-    "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+    "chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe",
     {
       exactOrigins: new Set([
-        "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+        "chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe"
       ]),
       extensionSchemes: new Set(),
       allowAnyExtension: false
     }
   ), true);
+});
+
+test("allows the current local Edge release-test Origin", () => {
+  assert.equal(isOriginAllowed(
+    "chrome-extension://mdfjbiaoihgoamlkhjbhadmdocofhihp",
+    {
+      exactOrigins: new Set([
+        "chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe",
+        "chrome-extension://mdfjbiaoihgoamlkhjbhadmdocofhihp"
+      ]),
+      extensionSchemes: new Set(),
+      allowAnyExtension: false
+    }
+  ), true);
+});
+
+test("maps only user-visible AI features to daily free quotas", () => {
+  assert.equal(quotaFeatureForRequest("content_map"), "content_map");
+  assert.equal(quotaFeatureForRequest("content_map_correction"), "content_map");
+  assert.equal(quotaFeatureForRequest("remix_article"), "content_remix");
+  assert.equal(quotaFeatureForRequest("web_search"), "");
+  assert.equal(quotaFeatureForRequest("interview_people"), "");
+});
+
+test("accepts only plausible DeepSeek user API keys", () => {
+  assert.equal(normalizeUserApiKey(" sk-abcdefgh12345678 "), "sk-abcdefgh12345678");
+  assert.throws(() => normalizeUserApiKey("not-a-key"), /格式不正确/u);
 });
 
 test("allows valid Chrome and Edge extension Origins with an explicit wildcard", () => {
