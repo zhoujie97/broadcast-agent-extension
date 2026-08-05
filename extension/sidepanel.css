@@ -315,6 +315,7 @@ h2 {
   padding: 11px 12px;
   cursor: pointer;
   font-weight: 650;
+  font-size: 13px;
   list-style: none;
 }
 
@@ -324,7 +325,7 @@ h2 {
 
 .config-state {
   color: var(--secondary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -336,6 +337,79 @@ h2 {
   display: grid;
   gap: 10px;
   padding: 0 12px 12px;
+  font-size: 13px;
+}
+
+.deepseek-key-settings {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+
+.deepseek-key-settings h3,
+.deepseek-key-settings p {
+  margin: 0;
+}
+
+.deepseek-key-settings h3 {
+  font-size: 13px;
+}
+
+.deepseek-key-settings form {
+  display: grid;
+  gap: 9px;
+}
+
+.deepseek-key-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.deepseek-key-remember input {
+  margin-top: 2px;
+}
+
+.deepseek-key-actions,
+.deepseek-key-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.deepseek-key-actions button {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 13px;
+}
+
+.deepseek-key-links a {
+  color: #087fab;
+  font-size: 13px;
+  text-underline-offset: 3px;
+}
+
+.deepseek-key-status {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.deepseek-key-settings .field {
+  font-size: 13px;
+}
+
+.deepseek-key-status.success {
+  color: #18743b;
+}
+
+.deepseek-key-status.error {
+  color: #a34136;
 }
 
 .privacy-actions {
@@ -358,6 +432,17 @@ h2 {
 .consent-state {
   margin: 10px 0 0;
   font-size: 13px;
+}
+
+.quota-dialog {
+  width: min(500px, calc(100vw - 32px));
+}
+
+.quota-dialog-message {
+  margin: 18px 0 22px;
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.75;
 }
 
 .consent-dialog {

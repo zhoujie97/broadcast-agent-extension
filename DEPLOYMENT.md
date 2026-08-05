@@ -36,7 +36,8 @@ DeepSeek 对话请求启用 `stream: true`，Vercel Functions 以 SSE 原样转�
 4. 在 Environment Variables 中录入：
    - `DEEPSEEK_API_KEY`：DeepSeek 正式密钥（使用 DeepSeek 对话模型时必填）。
    - `SESSION_SIGNING_SECRET`：至少 24 字符的随机字符串。
-   - `ALLOWED_EXTENSION_ORIGINS`：正式发布优先填写固定 Origin，例如 `chrome-extension://babomghgdgifmepkmndbepfidadbhffo`。多个 Origin 用英文逗号分隔。侧载测试阶段可暂时填写 `chrome-extension://*`，它只匹配格式合法的 Chrome/Edge 扩展 Origin；拿到正式扩展 ID 后应改回固定值。
+   - `ALLOWED_EXTENSION_ORIGINS`：当前验收阶段填写 `chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe,chrome-extension://mdfjbiaoihgoamlkhjbhadmdocofhihp`。前者是 Edge 商店版，后者是当前本地 v1.0.18 测试副本。这里需要的是 `edge://extensions` 显示的 32 位字母运行时 ID，不是 Partner Center 产品 GUID。Edge 基于 Chromium，因此即使没有发布 Chrome 版，Origin 仍以 `chrome-extension://` 开头。
+   - `FREE_DAILY_CALLS_PER_FEATURE`：填写 `2`，表示每个用户每个可见 AI 功能每天免费使用 2 次。
    - `AI_MODEL`：推荐 `deepseek-v4-flash`
    - `AI_FALLBACK_MODEL`：可留空。
    - 人物资料和延伸探索通过 DeepSeek Anthropic 兼容接口的 Web Search 工具完成，不需要第二个供应商密钥。
@@ -50,6 +51,7 @@ DeepSeek 对话请求启用 `stream: true`，Vercel Functions 以 SSE 原样转�
 REQUEST_TIMEOUT_MS=105000
 SESSION_TTL_SECONDS=604800
 RATE_LIMIT_PER_MINUTE=8
+FREE_DAILY_CALLS_PER_FEATURE=2
 DAILY_INSTALLATION_UNITS=80
 GLOBAL_DAILY_UNITS=5000
 MAX_BODY_BYTES=1048576
@@ -89,7 +91,7 @@ dist/broadcast-agent-extension.zip
 1. 登录 Microsoft Partner Center 并加入 Microsoft Edge Program。
 2. 创建扩展，上传生产 ZIP。
 3. Availability 选择 **Hidden**。
-4. 获得正式扩展 ID 后，把 `chrome-extension://正式扩展ID` 加入 Vercel 的 `ALLOWED_EXTENSION_ORIGINS` 并重新部署。
+4. 从商店安装正式版，在 `edge://extensions` 复制 32 位字母运行时 ID，把 `chrome-extension://运行时ID` 加入 Vercel 的 `ALLOWED_EXTENSION_ORIGINS` 并重新部署。Partner Center 产品 GUID 只用于管理商店提交，不能用于此项配置。
 5. 填写商店资料、隐私政策 URL、支持 URL、权限说明和审核备注。
 6. 上传能展示悬浮面板、字幕读取与时间戳跳转的截图。
 7. 审核通过后，用商店安装包完成端到端验收。

@@ -37,6 +37,14 @@ test("accepts names but rejects titles and generic interview roles", () => {
   assert.equal(isPlausiblePersonName("本期嘉宾"), false);
 });
 
+test("removes malformed life periods that contain a month without a year", () => {
+  assert.equal(ContentUtils.normalizeLifePeriod("年9月"), "");
+  assert.equal(ContentUtils.normalizeLifePeriod("9月"), "");
+  assert.equal(ContentUtils.normalizeLifePeriod("9月12日"), "");
+  assert.equal(ContentUtils.normalizeLifePeriod("2024年9月"), "2024年9月");
+  assert.equal(ContentUtils.normalizeLifePeriod("职业早期"), "职业早期");
+});
+
 test("uses the selected guest in person-specific remix cache scopes", () => {
   assert.equal(
     remixCacheScope("profile", "medium", "詹青云"),

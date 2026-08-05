@@ -52,6 +52,12 @@ const GLOBAL_DAILY_UNITS = clamp(
   1_000_000,
   5000
 );
+const FREE_DAILY_CALLS_PER_FEATURE = clamp(
+  Number(process.env.FREE_DAILY_CALLS_PER_FEATURE),
+  1,
+  100,
+  2
+);
 const allowedOriginRules = String(
   process.env.ALLOWED_EXTENSION_ORIGINS || ""
 )
@@ -86,8 +92,12 @@ export async function handleProxyRequest(request, response) {
 
   if (request.method === "OPTIONS") {
     if (!corsOrigin) {
+      logRejectedOrigin({ requestId, path: request.url, origin });
       return sendJson(response, 403, {
-        error: { code: "ORIGIN_NOT_ALLOWED", message: "Origin not allowed" }
+        error: {
+          code: "ORIGIN_NOT_ALLOWED",
+          message: `Origin not allowed（收到：${originForDiagnostics(origin)}）`
+        }
       });
     }
     setCorsHeaders(response, corsOrigin);
@@ -105,13 +115,18 @@ export async function handleProxyRequest(request, response) {
       fallbackConfigured: Boolean(FALLBACK_MODEL),
       streaming: true,
       webSearchProvider: "deepseek",
-      webSearchConfigured: isWebSearchConfigured()
+      webSearchConfigured: isWebSearchConfigured(),
+      freeDailyCallsPerFeature: FREE_DAILY_CALLS_PER_FEATURE
     });
   }
 
   if (!corsOrigin) {
+    logRejectedOrigin({ requestId, path: request.url, origin });
     return sendJson(response, 403, {
-      error: { code: "ORIGIN_NOT_ALLOWED", message: "Origin not allowed" }
+      error: {
+        code: "ORIGIN_NOT_ALLOWED",
+        message: `Origin not allowed（收到：${originForDiagnostics(origin)}）`
+      }
     });
   }
   setCorsHeaders(response, corsOrigin);
@@ -146,9 +161,21 @@ export async function handleProxyRequest(request, response) {
   }
 
   const feature = normalizeFeature(request.headers["x-ai-feature"]);
+  const quotaFeature = quotaFeatureForRequest(feature);
+  const actionId = normalizeActionId(request.headers["x-ai-action-id"]);
+  let userApiKey = "";
   const units = featureUnits(feature);
   try {
-    consumeQuota(session.installationId, clientIp(request), units);
+    userApiKey = normalizeUserApiKey(request.headers["x-deepseek-api-key"]);
+    enforceMinuteRateLimit(session.installationId, clientIp(request));
+    if (!userApiKey) {
+      consumeFreeQuota(
+        session.installationId,
+        quotaFeature,
+        actionId,
+        units
+      );
+    }
   } catch (error) {
     return sendProxyError(response, error);
   }
@@ -164,7 +191,8 @@ export async function handleProxyRequest(request, response) {
       const upstream = await requestWebSearch({
         query: searchQuery,
         count: clamp(Number(input.count), 1, 20, 10),
-        domain: normalizeSearchDomain(input.domain)
+        domain: normalizeSearchDomain(input.domain),
+        apiKey: userApiKey || DEEPSEEK_API_KEY
       });
       return relayUpstream(response, upstream);
     }
@@ -178,7 +206,8 @@ export async function handleProxyRequest(request, response) {
         temperature: input.temperature,
         maxTokens: input.max_tokens,
         responseFormat: input.response_format,
-        stream: input.stream === true
+        stream: input.stream === true,
+        apiKey: userApiKey || DEEPSEEK_API_KEY
       });
       return await relayUpstream(response, upstream);
     }
@@ -225,7 +254,8 @@ async function requestChatCompletion({
   temperature,
   maxTokens,
   responseFormat,
-  stream
+  stream,
+  apiKey
 }) {
   const requestModel = async (selectedModel) => fetchWithTimeout(
     DEEPSEEK_CHAT_URL,
@@ -233,7 +263,7 @@ async function requestChatCompletion({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
         model: selectedModel,
@@ -258,8 +288,8 @@ function isWebSearchConfigured() {
   return Boolean(DEEPSEEK_API_KEY);
 }
 
-async function requestWebSearch({ query, count, domain = "" }) {
-  if (!DEEPSEEK_API_KEY) {
+async function requestWebSearch({ query, count, domain = "", apiKey }) {
+  if (!apiKey) {
     throw httpError(
       503,
       "WEB_SEARCH_NOT_CONFIGURED",
@@ -270,7 +300,7 @@ async function requestWebSearch({ query, count, domain = "" }) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": DEEPSEEK_API_KEY,
+      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
@@ -378,6 +408,23 @@ function resolveCorsOrigin(origin) {
   return isOriginAllowed(origin) ? origin : "";
 }
 
+function originForDiagnostics(origin) {
+  const normalized = String(origin || "").trim();
+  return /^(?:chrome-extension|moz-extension):\/\/[a-z0-9-]{1,80}$/iu.test(normalized)
+    ? normalized
+    : normalized ? "非扩展 Origin" : "未携带 Origin";
+}
+
+function logRejectedOrigin({ requestId, path, origin }) {
+  console.warn(JSON.stringify({
+    level: "warning",
+    event: "origin_rejected",
+    requestId,
+    path,
+    origin: originForDiagnostics(origin)
+  }));
+}
+
 export function isOriginAllowed(origin, {
   exactOrigins = allowedOrigins,
   extensionSchemes = allowedExtensionSchemes,
@@ -402,7 +449,7 @@ function setCorsHeaders(response, origin) {
   response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Installation-ID, X-AI-Feature, X-Request-ID"
+    "Content-Type, Authorization, X-Installation-ID, X-AI-Feature, X-AI-Action-ID, X-DeepSeek-API-Key, X-Request-ID"
   );
 }
 
@@ -511,7 +558,7 @@ function authenticateRequest(request) {
   return decoded;
 }
 
-function consumeQuota(installationId, ip, units) {
+function enforceMinuteRateLimit(installationId, ip) {
   const now = Date.now();
   const minute = Math.floor(now / 60_000);
   const minuteKey = `${installationId}:${ip}:${minute}`;
@@ -520,23 +567,55 @@ function consumeQuota(installationId, ip, units) {
     throw httpError(429, "RATE_LIMITED", "请求过于频繁，请稍后再试。");
   }
   minuteUsage.set(minuteKey, minuteCount + 1);
+  cleanupUsageMaps(minute, utcDay());
+}
 
+function consumeFreeQuota(installationId, quotaFeature, actionId, units) {
   const day = utcDay();
   const installation = dailyUsage.get(installationId);
   const installationUnits = installation?.day === day ? installation.units : 0;
   if (installationUnits + units > DAILY_INSTALLATION_UNITS) {
     throw httpError(429, "DAILY_QUOTA_EXCEEDED", "今日 AI 使用额度已用完。");
   }
+  const features = installation?.day === day && installation.features
+    ? installation.features
+    : {};
+  const featureUsage = quotaFeature
+    ? features[quotaFeature] || { count: 0, actionIds: [] }
+    : null;
+  const duplicateAction = Boolean(
+    featureUsage &&
+    actionId &&
+    featureUsage.actionIds.includes(actionId)
+  );
+  if (
+    featureUsage &&
+    !duplicateAction &&
+    featureUsage.count >= FREE_DAILY_CALLS_PER_FEATURE
+  ) {
+    throw httpError(
+      429,
+      "DAILY_FEATURE_QUOTA_EXCEEDED",
+      `该功能今日 ${FREE_DAILY_CALLS_PER_FEATURE} 次免费额度已用完，请在“AI 能力”中填写自己的 DeepSeek API Key。`
+    );
+  }
   if (globalDailyUsage.day !== day) globalDailyUsage = { day, units: 0 };
   if (globalDailyUsage.units + units > GLOBAL_DAILY_UNITS) {
     throw httpError(503, "SERVICE_BUDGET_EXCEEDED", "AI 服务今日额度已用完。");
   }
+  if (featureUsage && !duplicateAction) {
+    features[quotaFeature] = {
+      count: featureUsage.count + 1,
+      actionIds: [...featureUsage.actionIds, actionId].filter(Boolean).slice(-20)
+    };
+  }
   dailyUsage.set(installationId, {
     day,
-    units: installationUnits + units
+    units: installationUnits + units,
+    features
   });
   globalDailyUsage.units += units;
-  cleanupUsageMaps(minute, day);
+  cleanupUsageMaps(Math.floor(Date.now() / 60_000), day);
 }
 
 function enforceRegistrationRateLimit(ip) {
@@ -565,6 +644,32 @@ function cleanupUsageMaps(currentMinute, currentDay) {
 
 function normalizeFeature(value) {
   return String(value || "unknown").replace(/[^a-zA-Z0-9_-]/gu, "").slice(0, 64);
+}
+
+export function quotaFeatureForRequest(feature) {
+  return ({
+    selection_insight: "smart_transcript",
+    content_map: "content_map",
+    content_map_correction: "content_map",
+    clip_candidates: "highlight_clips",
+    remix_article: "content_remix",
+    podcast_answer: "ai_question",
+    ai_followup: "extended_discovery"
+  })[normalizeFeature(feature)] || "";
+}
+
+function normalizeActionId(value) {
+  const actionId = String(value || "").trim();
+  return /^[a-zA-Z0-9_-]{8,80}$/u.test(actionId) ? actionId : "";
+}
+
+export function normalizeUserApiKey(value) {
+  const apiKey = String(value || "").trim();
+  if (!apiKey) return "";
+  if (!/^sk-[a-zA-Z0-9_-]{8,240}$/u.test(apiKey)) {
+    throw httpError(400, "INVALID_USER_API_KEY", "DeepSeek API Key 格式不正确。");
+  }
+  return apiKey;
 }
 
 function featureUnits(feature) {

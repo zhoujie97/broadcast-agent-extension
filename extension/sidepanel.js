@@ -27,6 +27,18 @@ const elements = {
   aiConfigState: document.querySelector("#ai-config-state"),
   aiStatus: document.querySelector("#ai-status"),
   aiConsentState: document.querySelector("#ai-consent-state"),
+  deepseekKeyForm: document.querySelector("#deepseek-key-form"),
+  deepseekKeyInput: document.querySelector("#deepseek-key-input"),
+  deepseekKeyRemember: document.querySelector("#deepseek-key-remember"),
+  deepseekKeyStatus: document.querySelector("#deepseek-key-status"),
+  testDeepseekKeyButton: document.querySelector("#test-deepseek-key-button"),
+  saveDeepseekKeyButton: document.querySelector("#save-deepseek-key-button"),
+  clearDeepseekKeyButton: document.querySelector("#clear-deepseek-key-button"),
+  quotaDialog: document.querySelector("#quota-dialog"),
+  quotaDialogMessage: document.querySelector("#quota-dialog-message"),
+  closeQuotaDialogButton: document.querySelector("#close-quota-dialog-button"),
+  laterQuotaButton: document.querySelector("#later-quota-button"),
+  configureKeyButton: document.querySelector("#configure-key-button"),
   reviewAiConsentButton: document.querySelector("#review-ai-consent-button"),
   revokeAiConsentButton: document.querySelector("#revoke-ai-consent-button"),
   clearVideoAiDataButton: document.querySelector("#clear-video-ai-data-button"),
@@ -201,6 +213,16 @@ elements.aiConsentDialog.addEventListener("cancel", (event) => {
 elements.revokeAiConsentButton.addEventListener("click", revokeAiConsent);
 elements.clearVideoAiDataButton.addEventListener("click", clearCurrentVideoAiData);
 elements.clearAllDataButton.addEventListener("click", clearAllLocalData);
+elements.deepseekKeyForm.addEventListener("submit", saveDeepSeekKey);
+elements.testDeepseekKeyButton.addEventListener("click", testDeepSeekKey);
+elements.clearDeepseekKeyButton.addEventListener("click", clearDeepSeekKey);
+elements.closeQuotaDialogButton.addEventListener("click", closeQuotaDialog);
+elements.laterQuotaButton.addEventListener("click", closeQuotaDialog);
+elements.configureKeyButton.addEventListener("click", openKeySettingsFromQuota);
+elements.quotaDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeQuotaDialog();
+});
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "AI_STREAM_PROGRESS") {
@@ -230,6 +252,7 @@ window.setInterval(syncPlaybackState, 1000);
 
 async function initialize() {
   await updateAiConsentState();
+  await loadDeepSeekKeyStatus();
   await loadAiStatus();
   const pageResponse = await chrome.runtime.sendMessage({
     type: "GET_ACTIVE_PAGE"
@@ -334,11 +357,134 @@ async function clearAllLocalData() {
     return;
   }
   await chrome.storage.local.clear();
+  await chrome.runtime.sendMessage({ type: "CLEAR_DEEPSEEK_KEY" });
   notes = [];
   renderNotes();
   await updateAiConsentState();
+  await loadDeepSeekKeyStatus();
   setAiStatus("已清除插件保存在本机浏览器中的全部数据。", false);
   await loadWorkspaceData();
+}
+
+async function loadDeepSeekKeyStatus() {
+  const response = await chrome.runtime.sendMessage({
+    type: "GET_DEEPSEEK_KEY_STATUS"
+  });
+  if (!response?.ok) {
+    elements.deepseekKeyStatus.textContent =
+      response?.error?.message || "无法读取 DeepSeek Key 状态。";
+    elements.deepseekKeyStatus.classList.add("error");
+    return;
+  }
+  elements.deepseekKeyStatus.classList.remove("error", "success");
+  elements.clearDeepseekKeyButton.hidden = !response.configured;
+  elements.deepseekKeyRemember.checked = response.storage === "local";
+  if (response.configured) {
+    elements.deepseekKeyStatus.textContent =
+      `已配置 ${response.masked}，当前 AI 请求使用你的 DeepSeek 账户。`;
+    elements.deepseekKeyStatus.classList.add("success");
+  } else {
+    elements.deepseekKeyStatus.textContent =
+      "未配置，当前使用每个功能每天 2 次的免费额度。";
+  }
+}
+
+function isDailyFeatureQuotaError(error) {
+  return /(?:DAILY_FEATURE_QUOTA_EXCEEDED|该功能今日\s*\d+\s*次免费额度已用完)/u.test(
+    String(error?.message || error || "")
+  );
+}
+
+function showQuotaDialog(error) {
+  const message = String(error?.message || "");
+  elements.quotaDialogMessage.textContent = message.includes("免费额度已用完")
+    ? message.replace(/请在“AI 能力”中填写自己的 DeepSeek API Key。?$/u, "你可以明天继续使用，或者填写自己的 DeepSeek API Key。")
+    : "该功能每天可免费使用 2 次。你可以明天继续使用，或者填写自己的 DeepSeek API Key。";
+  if (!elements.quotaDialog.open) elements.quotaDialog.showModal();
+}
+
+function handleQuotaError(error, inlineElement = null) {
+  if (!isDailyFeatureQuotaError(error)) return false;
+  if (inlineElement) inlineElement.hidden = true;
+  showQuotaDialog(error);
+  return true;
+}
+
+function closeQuotaDialog() {
+  if (elements.quotaDialog.open) elements.quotaDialog.close();
+}
+
+function openKeySettingsFromQuota() {
+  closeQuotaDialog();
+  elements.aiSettings.open = true;
+  elements.aiSettings.scrollIntoView({ behavior: "smooth", block: "start" });
+  window.setTimeout(() => elements.deepseekKeyInput.focus(), 250);
+}
+
+async function testDeepSeekKey() {
+  const apiKey = elements.deepseekKeyInput.value.trim();
+  if (!apiKey) {
+    elements.deepseekKeyStatus.textContent = "请先输入 DeepSeek API Key。";
+    elements.deepseekKeyStatus.classList.add("error");
+    return;
+  }
+  elements.testDeepseekKeyButton.disabled = true;
+  elements.deepseekKeyStatus.textContent = "正在验证 Key…";
+  elements.deepseekKeyStatus.classList.remove("error", "success");
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "TEST_DEEPSEEK_KEY",
+      apiKey
+    });
+    if (!response?.ok) throw new Error(response?.error?.message || "Key 验证失败。");
+    elements.deepseekKeyStatus.textContent = "Key 验证成功，可以保存使用。";
+    elements.deepseekKeyStatus.classList.add("success");
+  } catch (error) {
+    elements.deepseekKeyStatus.textContent = error.message;
+    elements.deepseekKeyStatus.classList.add("error");
+  } finally {
+    elements.testDeepseekKeyButton.disabled = false;
+  }
+}
+
+async function saveDeepSeekKey(event) {
+  event.preventDefault();
+  const apiKey = elements.deepseekKeyInput.value.trim();
+  elements.saveDeepseekKeyButton.disabled = true;
+  try {
+    const tested = await chrome.runtime.sendMessage({
+      type: "TEST_DEEPSEEK_KEY",
+      apiKey
+    });
+    if (!tested?.ok) throw new Error(tested?.error?.message || "Key 验证失败。");
+    const response = await chrome.runtime.sendMessage({
+      type: "SAVE_DEEPSEEK_KEY",
+      apiKey,
+      remember: elements.deepseekKeyRemember.checked
+    });
+    if (!response?.ok) throw new Error(response?.error?.message || "Key 保存失败。");
+    elements.deepseekKeyInput.value = "";
+    await loadDeepSeekKeyStatus();
+  } catch (error) {
+    elements.deepseekKeyStatus.textContent = error.message;
+    elements.deepseekKeyStatus.classList.add("error");
+  } finally {
+    elements.saveDeepseekKeyButton.disabled = false;
+  }
+}
+
+async function clearDeepSeekKey() {
+  const response = await chrome.runtime.sendMessage({
+    type: "CLEAR_DEEPSEEK_KEY"
+  });
+  if (!response?.ok) {
+    elements.deepseekKeyStatus.textContent =
+      response?.error?.message || "Key 删除失败。";
+    elements.deepseekKeyStatus.classList.add("error");
+    return;
+  }
+  elements.deepseekKeyInput.value = "";
+  await loadDeepSeekKeyStatus();
 }
 
 async function syncPlaybackState() {
@@ -476,7 +622,7 @@ async function loadTranscript() {
 
   setAiStatus(
     aiAvailable
-      ? `${aiModelName} 已就绪，无需下载模型或配置 API Key。`
+      ? ""
       : "AI API 代理未连接，请先启动或部署代理。",
     !aiAvailable
   );
@@ -735,6 +881,7 @@ async function generateOverview() {
     await loadSelectedRemix();
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
+    if (handleQuotaError(error, elements.overviewError)) return;
     elements.overviewError.textContent = error.message;
     elements.overviewError.hidden = false;
   } finally {
@@ -787,12 +934,13 @@ async function correctOverview(event) {
     elements.overviewCorrectionStatus.textContent =
       `已核实并修正：${response.explanation || "问题成立。"}`;
   } catch (error) {
+    if (handleQuotaError(error, elements.overviewCorrectionStatus)) return;
     elements.overviewCorrectionStatus.textContent = error.message;
     elements.overviewCorrectionStatus.classList.add("error");
   } finally {
     elements.overviewCorrectionButton.disabled = false;
     elements.overviewCorrectionButton.textContent = "核实并修正";
-    elements.overviewCorrectionStatus.hidden = false;
+    elements.overviewCorrectionStatus.hidden = elements.quotaDialog.open;
   }
 }
 
@@ -945,14 +1093,7 @@ function renderLifePaths(trajectories) {
 }
 
 function displayLifePeriod(value) {
-  const period = String(value || "")
-    .replace(/\s+/gu, "")
-    .replace(/^[,，.。:：;；、\-—–]+|[,，.。:：;；、\-—–]+$/gu, "")
-    .trim();
-  return (
-    period &&
-    !/^(?:年|月|日|年代|时期|阶段|时间|未知|不详|未明|待定|阶段未明|时间不详)$/u.test(period)
-  ) ? period : "";
+  return ContentUtils.normalizeLifePeriod(value);
 }
 
 function renderThoughtFragments(fragments) {
@@ -1010,6 +1151,7 @@ async function generateClipCandidates() {
     });
     elements.generateClipsButton.textContent = "重新分析内容价值";
   } catch (error) {
+    if (handleQuotaError(error, elements.clipsError)) return;
     elements.clipsError.textContent = error.message;
     elements.clipsError.hidden = false;
   } finally {
@@ -1485,7 +1627,9 @@ function updateAiStreamProgress(message = {}) {
   if (message.feature === "content_map_correction") {
     elements.overviewCorrectionStatus.textContent = message.done
       ? "AI 已返回结果，正在核验结构和证据…"
-      : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+      : message.fallback
+        ? "流式传输未完整结束，正在自动重试…"
+        : `DeepSeek 正在流式生成，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
     return;
   }
   if (!module || (module !== "insight" && !activeAiModules.has(module))) return;
@@ -1501,7 +1645,9 @@ function updateAiStreamProgress(message = {}) {
   if (!label) return;
   label.textContent = message.done
     ? "DeepSeek 已生成完成，正在校验并整理结果…"
-    : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+    : message.fallback
+      ? "流式传输未完整结束，正在自动重试…"
+      : `DeepSeek 正在流式生成，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
 }
 
 async function generateFollowup() {
@@ -1527,6 +1673,7 @@ async function generateFollowup() {
     });
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
   } catch (error) {
+    if (handleQuotaError(error, elements.followupError)) return;
     elements.followupError.textContent = error.message;
     elements.followupError.hidden = false;
   } finally {
@@ -1726,6 +1873,7 @@ async function generateRemix() {
       )]: response.remix
     });
   } catch (error) {
+    if (handleQuotaError(error, elements.remixError)) return;
     elements.remixError.classList.remove("info");
     elements.remixError.textContent = error.message;
     elements.remixError.hidden = false;
@@ -1974,6 +2122,7 @@ async function askPodcast(event) {
     renderNotes();
     elements.questionInput.value = "";
   } catch (error) {
+    if (handleQuotaError(error, elements.questionError)) return;
     elements.questionError.textContent = error.message;
     elements.questionError.hidden = false;
   } finally {
@@ -2093,7 +2242,9 @@ async function requestSelectionInsight(segment, selectedText, force = false) {
     });
   } catch (error) {
     if (requestId === insightRequestId) {
-      showInsightError(error.message || "AI 选中文字解释失败。");
+      if (!handleQuotaError(error, elements.insightError)) {
+        showInsightError(error.message || "AI 选中文字解释失败。");
+      }
     }
     return;
   }
@@ -2103,7 +2254,10 @@ async function requestSelectionInsight(segment, selectedText, force = false) {
   }
 
   if (!response?.ok) {
-    showInsightError(response?.error?.message || "AI 选中文字解释失败。");
+    const error = new Error(response?.error?.message || "AI 选中文字解释失败。");
+    if (!handleQuotaError(error, elements.insightError)) {
+      showInsightError(error.message);
+    }
     return;
   }
 

@@ -52,7 +52,9 @@ const handleRuntimeMessage = (message, sender, sendResponse) => {
     if (submitButton?.disabled && status) {
       status.textContent = message.done
         ? "DeepSeek 已生成完成，正在整理回答…"
-        : `DeepSeek 正在流式回答，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+        : message.fallback
+          ? "流式传输未完整结束，正在自动重试…"
+          : `DeepSeek 正在流式回答，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
     }
     return false;
   }
@@ -77,7 +79,7 @@ async function toggleFloatingPanel() {
 async function createFloatingPanel() {
   const stored = await chrome.storage.local.get("floatingPanelState");
   const state = stored.floatingPanelState || {};
-  const hasSavedPosition = state.layoutVersion === 3;
+  const hasSavedPosition = state.layoutVersion === 4;
   const viewportWidth = Math.max(320, window.innerWidth);
   const viewportHeight = Math.max(1, window.innerHeight);
   const maxPanelWidth = Math.max(296, viewportWidth - 24);
@@ -414,7 +416,7 @@ async function persistFloatingPanelState(patch) {
   await chrome.storage.local.set({
     floatingPanelState: {
       ...(stored.floatingPanelState || {}),
-      layoutVersion: 3,
+      layoutVersion: 4,
       ...patch
     }
   });
