@@ -103,6 +103,7 @@ export async function handleProxyRequest(request, response) {
       provider: "deepseek",
       model: MODEL,
       fallbackConfigured: Boolean(FALLBACK_MODEL),
+      streaming: true,
       webSearchProvider: "deepseek",
       webSearchConfigured: isWebSearchConfigured()
     });
@@ -176,9 +177,10 @@ export async function handleProxyRequest(request, response) {
         messages,
         temperature: input.temperature,
         maxTokens: input.max_tokens,
-        responseFormat: input.response_format
+        responseFormat: input.response_format,
+        stream: input.stream === true
       });
-      return relayUpstream(response, upstream);
+      return await relayUpstream(response, upstream);
     }
 
     return sendJson(response, 404, {
@@ -222,7 +224,8 @@ async function requestChatCompletion({
   messages,
   temperature,
   maxTokens,
-  responseFormat
+  responseFormat,
+  stream
 }) {
   const requestModel = async (selectedModel) => fetchWithTimeout(
     DEEPSEEK_CHAT_URL,
@@ -235,7 +238,7 @@ async function requestChatCompletion({
       body: JSON.stringify({
         model: selectedModel,
         messages,
-        stream: false,
+        stream: stream === true,
         temperature: clamp(Number(temperature), 0, 1, 0.2),
         max_tokens: clamp(Number(maxTokens), 1, 8192, 4096),
         thinking: { type: "disabled" },
@@ -342,12 +345,33 @@ async function fetchWithTimeout(url, options) {
 }
 
 async function relayUpstream(response, upstream) {
-  const text = await upstream.text();
+  const contentType = upstream.headers.get("content-type") || "application/json";
   response.writeHead(upstream.status, {
-    "Content-Type": upstream.headers.get("content-type") || "application/json",
-    "Cache-Control": "no-store"
+    "Content-Type": contentType,
+    "Cache-Control": contentType.includes("text/event-stream")
+      ? "no-cache, no-transform"
+      : "no-store",
+    ...(contentType.includes("text/event-stream")
+      ? { "X-Accel-Buffering": "no" }
+      : {})
   });
-  response.end(text);
+  response.flushHeaders?.();
+  if (!upstream.body) {
+    response.end();
+    return;
+  }
+  const reader = upstream.body.getReader();
+  try {
+    while (!response.destroyed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      response.write(Buffer.from(value));
+      response.flush?.();
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!response.destroyed) response.end();
 }
 
 function resolveCorsOrigin(origin) {

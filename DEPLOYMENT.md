@@ -26,6 +26,7 @@ Bilibili 页面
 - `POST /v1/web-search`
 
 `proxy/server.mjs` 同时作为函数的共享处理器和本地开发服务器，扩展端接口契约不变。
+DeepSeek 对话请求启用 `stream: true`，Vercel Functions 以 SSE 原样转发；扩展后台逐块解析并在完整 JSON 校验后提交最终结果。
 
 ### 2.1 首次部署
 

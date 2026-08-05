@@ -132,6 +132,15 @@ let insightRequestId = 0;
 let aiConsentResolver = null;
 const AI_CONSENT_KEY = "aiDataConsent";
 const AI_CONSENT_VERSION = 1;
+const activeAiModules = new Set();
+const moduleLoadingLabels = Object.freeze({
+  overview: "正在划分主题、重建人物轨迹并提炼思想碎片…",
+  clips: "正在生成内容价值画像和传播场景建议…",
+  remix: "正在构思结构并重写采访…",
+  question: "正在检索采访上下文并回答…",
+  followup: "正在联网检索并核对相关内容…",
+  insight: "正在结合前后文分析…"
+});
 
 elements.reloadButton.addEventListener("click", loadTranscript);
 elements.searchInput.addEventListener("input", filterTranscript);
@@ -194,6 +203,10 @@ elements.clearVideoAiDataButton.addEventListener("click", clearCurrentVideoAiDat
 elements.clearAllDataButton.addEventListener("click", clearAllLocalData);
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "AI_STREAM_PROGRESS") {
+    updateAiStreamProgress(message);
+    return;
+  }
   if (message?.type === "PLAYBACK_TIME") {
     lastPlaybackPushAt = Date.now();
     currentPlaybackSeconds = Math.max(0, Number(message.seconds) || 0);
@@ -1409,6 +1422,9 @@ function renderPeopleGroup(container, people, fallbackRole) {
 
 function setModuleBusy(module, busy) {
   const unavailable = transcriptSegments.length === 0;
+  if (busy) activeAiModules.add(module);
+  else activeAiModules.delete(module);
+  resetModuleLoadingLabel(module);
   if (module === "overview") {
     elements.generateOverviewButton.disabled = busy || unavailable;
     elements.overviewLoading.hidden = !busy;
@@ -1434,6 +1450,58 @@ function setModuleBusy(module, busy) {
     elements.followupLoading.hidden = !busy;
     if (busy) elements.followupError.hidden = true;
   }
+}
+
+function resetModuleLoadingLabel(module) {
+  const loadingElement = ({
+    overview: elements.overviewLoading,
+    clips: elements.clipsLoading,
+    remix: elements.remixLoading,
+    question: elements.questionLoading,
+    followup: elements.followupLoading,
+    insight: elements.insightLoading
+  })[module];
+  const label = loadingElement?.querySelector("span");
+  if (label && moduleLoadingLabels[module]) {
+    label.textContent = moduleLoadingLabels[module];
+  }
+}
+
+function updateAiStreamProgress(message = {}) {
+  const directModule = ({
+    content_map: "overview",
+    interview_people: "overview",
+    clip_candidates: "clips",
+    remix_article: "remix",
+    podcast_answer: "question",
+    ai_followup: "followup",
+    selection_insight: "insight"
+  })[message.feature];
+  let module = directModule;
+  if (message.feature === "interview_people_identification") {
+    module = ["remix", "followup", "overview"]
+      .find((candidate) => activeAiModules.has(candidate));
+  }
+  if (message.feature === "content_map_correction") {
+    elements.overviewCorrectionStatus.textContent = message.done
+      ? "AI 已返回结果，正在核验结构和证据…"
+      : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+    return;
+  }
+  if (!module || (module !== "insight" && !activeAiModules.has(module))) return;
+  const loadingElement = ({
+    overview: elements.overviewLoading,
+    clips: elements.clipsLoading,
+    remix: elements.remixLoading,
+    question: elements.questionLoading,
+    followup: elements.followupLoading,
+    insight: elements.insightLoading
+  })[module];
+  const label = loadingElement?.querySelector("span");
+  if (!label) return;
+  label.textContent = message.done
+    ? "DeepSeek 已生成完成，正在校验并整理结果…"
+    : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
 }
 
 async function generateFollowup() {

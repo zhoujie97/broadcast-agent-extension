@@ -1,4 +1,4 @@
-importScripts("person-utils.js", "content-utils.js");
+importScripts("person-utils.js", "content-utils.js", "stream-utils.js");
 
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
@@ -2688,6 +2688,7 @@ async function callAiJson({
   maxTokens = AI_CONFIG.defaultMaxTokens,
   validateResult
 }) {
+  const streamReporter = createAiStreamReporter(schemaName);
   const systemPrompt =
     `${instructions}\n你必须只返回一个符合以下 JSON Schema 的 JSON 对象。` +
     `不要道歉，不要解释任务，不要输出 Markdown：\n${JSON.stringify(schema)}`;
@@ -2700,7 +2701,8 @@ async function callAiJson({
     temperature,
     maxTokens,
     enforceJson: true,
-    feature: schemaName
+    feature: schemaName,
+    onStream: streamReporter
   });
   let outputText = extractChatCompletionText(payload);
 
@@ -2739,7 +2741,8 @@ async function callAiJson({
     temperature: 0,
     maxTokens,
     enforceJson: true,
-    feature: schemaName
+    feature: schemaName,
+    onStream: streamReporter
   });
   outputText = extractChatCompletionText(payload);
   parsed = tryParseModelJson(outputText);
@@ -2785,14 +2788,16 @@ async function requestAiProxyCompletion({
   temperature,
   maxTokens,
   enforceJson,
-  feature
+  feature,
+  onStream
 }) {
   let result = await sendAiProxyRequest({
     messages,
     temperature,
     maxTokens,
     enforceJson,
-    feature
+    feature,
+    onStream
   });
 
   if (!result.response.ok && enforceJson && result.response.status === 400) {
@@ -2801,7 +2806,8 @@ async function requestAiProxyCompletion({
       temperature,
       maxTokens,
       enforceJson: false,
-      feature
+      feature,
+      onStream
     });
   }
 
@@ -2827,7 +2833,8 @@ async function sendAiProxyRequest({
   temperature,
   maxTokens,
   enforceJson,
-  feature
+  feature,
+  onStream
 }) {
   let response;
   try {
@@ -2840,6 +2847,7 @@ async function sendAiProxyRequest({
         messages,
         temperature,
         max_tokens: maxTokens,
+        stream: true,
         thinking: { type: "disabled" },
         ...(enforceJson
           ? { response_format: { type: "json_object" } }
@@ -2855,7 +2863,7 @@ async function sendAiProxyRequest({
 
   let payload;
   try {
-    payload = await response.json();
+    payload = await readAiProxyPayload(response, onStream);
   } catch {
     throw createError(
       "AI_PROXY_INVALID_RESPONSE",
@@ -2864,6 +2872,82 @@ async function sendAiProxyRequest({
   }
 
   return { response, payload };
+}
+
+async function readAiProxyPayload(response, onStream) {
+  const contentType = String(response.headers.get("content-type") || "");
+  if (!contentType.includes("text/event-stream")) {
+    return response.json();
+  }
+  if (!response.body) {
+    throw new Error("流式响应没有可读取的内容。");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let outputText = "";
+  let responseId = "";
+  let model = "";
+  const processBlock = (block) => {
+    const event = StreamUtils.parseSseDataBlock(block);
+    if (event.id) responseId = event.id;
+    if (event.model) model = event.model;
+    if (!event.text) return;
+    outputText += event.text;
+    onStream?.({
+      delta: event.text,
+      text: outputText,
+      receivedCharacters: outputText.length,
+      done: false
+    });
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/u);
+      buffer = blocks.pop() || "";
+      for (const block of blocks) processBlock(block);
+      if (done) break;
+    }
+    if (buffer.trim()) processBlock(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+  onStream?.({
+    delta: "",
+    text: outputText,
+    receivedCharacters: outputText.length,
+    done: true
+  });
+  return {
+    id: responseId,
+    model,
+    choices: [{ message: { role: "assistant", content: outputText } }]
+  };
+}
+
+function createAiStreamReporter(feature) {
+  let lastReportedAt = 0;
+  return (progress = {}) => {
+    const now = Date.now();
+    if (!progress.done && now - lastReportedAt < 120) return;
+    lastReportedAt = now;
+    const message = {
+      type: "AI_STREAM_PROGRESS",
+      feature,
+      receivedCharacters: Number(progress.receivedCharacters) || 0,
+      done: progress.done === true
+    };
+    chrome.runtime.sendMessage(message).catch(() => {});
+    if (feature === "podcast_answer") {
+      chrome.tabs.query({ active: true, currentWindow: true })
+        .then(([tab]) => tab?.id
+          ? chrome.tabs.sendMessage(tab.id, message).catch(() => {})
+          : undefined)
+        .catch(() => {});
+    }
+  };
 }
 
 async function proxyFetch(url, options = {}, feature = "unknown", retry = true) {

@@ -12,6 +12,7 @@ const requiredFiles = [
   "sidepanel.css",
   "sidepanel.js",
   "transcript-utils.js",
+  "stream-utils.js",
   "person-utils.js",
   "privacy.html",
   "icons/icon16.png",

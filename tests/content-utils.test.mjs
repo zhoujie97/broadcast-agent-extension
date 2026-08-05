@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 await import("../extension/content-utils.js");
+await import("../extension/stream-utils.js");
 const {
   balanceFollowupGuestItems,
   findStableTranscriptSegmentIndex,
@@ -11,6 +12,23 @@ const {
   normalizeGuestNames,
   remixCacheScope
 } = globalThis.ContentUtils;
+const { parseSseDataBlock } = globalThis.StreamUtils;
+
+test("parses DeepSeek SSE content and completion markers", () => {
+  assert.deepEqual(
+    parseSseDataBlock(
+      'data: {"id":"chat-1","model":"deepseek","choices":[{"delta":{"content":"你好"},"finish_reason":null}]}'
+    ),
+    {
+      done: false,
+      id: "chat-1",
+      model: "deepseek",
+      text: "你好",
+      finishReason: null
+    }
+  );
+  assert.deepEqual(parseSseDataBlock("data: [DONE]"), { done: true });
+});
 
 test("accepts names but rejects titles and generic interview roles", () => {
   assert.equal(isPlausiblePersonName("金靖"), true);

@@ -46,6 +46,17 @@ const handleRuntimeMessage = (message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "AI_STREAM_PROGRESS" && message.feature === "podcast_answer") {
+    const submitButton = noteOverlay?.querySelector('[data-action="submit"]');
+    const status = noteOverlay?.querySelector(".podcast-help-editor small");
+    if (submitButton?.disabled && status) {
+      status.textContent = message.done
+        ? "DeepSeek 已生成完成，正在整理回答…"
+        : `DeepSeek 正在流式回答，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+    }
+    return false;
+  }
+
   return false;
 };
 chrome.runtime.onMessage.addListener(handleRuntimeMessage);
