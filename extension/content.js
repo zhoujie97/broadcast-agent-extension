@@ -52,7 +52,9 @@ const handleRuntimeMessage = (message, sender, sendResponse) => {
     if (submitButton?.disabled && status) {
       status.textContent = message.done
         ? "DeepSeek 已生成完成，正在整理回答…"
-        : `DeepSeek 正在流式回答，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+        : message.fallback
+          ? "流式响应中断，正在使用安全模式重新回答…"
+          : `DeepSeek 正在流式回答，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
     }
     return false;
   }

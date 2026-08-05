@@ -2690,8 +2690,11 @@ async function callAiJson({
 }) {
   const streamReporter = createAiStreamReporter(schemaName);
   const systemPrompt =
-    `${instructions}\n你必须只返回一个符合以下 JSON Schema 的 JSON 对象。` +
-    `不要道歉，不要解释任务，不要输出 Markdown：\n${JSON.stringify(schema)}`;
+    `${instructions}\n你必须只返回一个符合以下 JSON Schema 的纯 JSON 对象。` +
+    "第一个非空字符必须是 {，最后一个非空字符必须是 }；" +
+    "必须包含 required 中的全部字段，不得输出 additionalProperties 未声明的字段；" +
+    "禁止 Markdown 代码块、注释、前后说明、尾随逗号和未转义的字符串换行：\n" +
+    JSON.stringify(schema);
   const messages = [
     { role: "system", content: systemPrompt },
     { role: "user", content: input }
@@ -2791,24 +2794,35 @@ async function requestAiProxyCompletion({
   feature,
   onStream
 }) {
-  let result = await sendAiProxyRequest({
-    messages,
-    temperature,
-    maxTokens,
-    enforceJson,
-    feature,
-    onStream
-  });
+  const sendWithTransportFallback = async (jsonMode) => {
+    try {
+      return await sendAiProxyRequest({
+        messages,
+        temperature,
+        maxTokens,
+        enforceJson: jsonMode,
+        feature,
+        onStream,
+        stream: true
+      });
+    } catch (error) {
+      if (error?.code !== "AI_PROXY_INVALID_RESPONSE") throw error;
+      onStream?.({ fallback: true, receivedCharacters: 0, done: false });
+      return sendAiProxyRequest({
+        messages,
+        temperature,
+        maxTokens,
+        enforceJson: jsonMode,
+        feature,
+        onStream,
+        stream: false
+      });
+    }
+  };
+  let result = await sendWithTransportFallback(enforceJson);
 
   if (!result.response.ok && enforceJson && result.response.status === 400) {
-    result = await sendAiProxyRequest({
-      messages,
-      temperature,
-      maxTokens,
-      enforceJson: false,
-      feature,
-      onStream
-    });
+    result = await sendWithTransportFallback(false);
   }
 
   if (!result.response.ok) {
@@ -2834,7 +2848,8 @@ async function sendAiProxyRequest({
   maxTokens,
   enforceJson,
   feature,
-  onStream
+  onStream,
+  stream = true
 }) {
   let response;
   try {
@@ -2847,7 +2862,7 @@ async function sendAiProxyRequest({
         messages,
         temperature,
         max_tokens: maxTokens,
-        stream: true,
+        stream,
         thinking: { type: "disabled" },
         ...(enforceJson
           ? { response_format: { type: "json_object" } }
@@ -2864,10 +2879,11 @@ async function sendAiProxyRequest({
   let payload;
   try {
     payload = await readAiProxyPayload(response, onStream);
-  } catch {
+  } catch (error) {
     throw createError(
       "AI_PROXY_INVALID_RESPONSE",
-      `AI API 代理返回了无法解析的响应（HTTP ${response.status}）。`
+      `AI API 代理返回了无法解析的响应（HTTP ${response.status}）。`,
+      { cause: String(error?.message || error).slice(0, 160) }
     );
   }
 
@@ -2877,7 +2893,11 @@ async function sendAiProxyRequest({
 async function readAiProxyPayload(response, onStream) {
   const contentType = String(response.headers.get("content-type") || "");
   if (!contentType.includes("text/event-stream")) {
-    return response.json();
+    const rawText = await response.text();
+    if (!/^\s*(?:data:|:\s*keep-alive)/u.test(rawText)) {
+      return JSON.parse(rawText);
+    }
+    return readAiSseText(rawText, onStream);
   }
   if (!response.body) {
     throw new Error("流式响应没有可读取的内容。");
@@ -2888,8 +2908,10 @@ async function readAiProxyPayload(response, onStream) {
   let outputText = "";
   let responseId = "";
   let model = "";
+  let invalidBlocks = 0;
   const processBlock = (block) => {
     const event = StreamUtils.parseSseDataBlock(block);
+    if (event.invalid) invalidBlocks += 1;
     if (event.id) responseId = event.id;
     if (event.model) model = event.model;
     if (!event.text) return;
@@ -2914,6 +2936,52 @@ async function readAiProxyPayload(response, onStream) {
   } finally {
     reader.releaseLock();
   }
+  if (!outputText.trim()) {
+    throw new Error(
+      invalidBlocks
+        ? `SSE 包含 ${invalidBlocks} 个无法解析的数据块。`
+        : "SSE 没有返回模型正文。"
+    );
+  }
+  onStream?.({
+    delta: "",
+    text: outputText,
+    receivedCharacters: outputText.length,
+    done: true
+  });
+  return {
+    id: responseId,
+    model,
+    choices: [{ message: { role: "assistant", content: outputText } }]
+  };
+}
+
+function readAiSseText(rawText, onStream) {
+  let outputText = "";
+  let responseId = "";
+  let model = "";
+  let invalidBlocks = 0;
+  for (const block of String(rawText || "").split(/\r?\n\r?\n/u)) {
+    const event = StreamUtils.parseSseDataBlock(block);
+    if (event.invalid) invalidBlocks += 1;
+    if (event.id) responseId = event.id;
+    if (event.model) model = event.model;
+    if (!event.text) continue;
+    outputText += event.text;
+    onStream?.({
+      delta: event.text,
+      text: outputText,
+      receivedCharacters: outputText.length,
+      done: false
+    });
+  }
+  if (!outputText.trim()) {
+    throw new Error(
+      invalidBlocks
+        ? `SSE 包含 ${invalidBlocks} 个无法解析的数据块。`
+        : "SSE 没有返回模型正文。"
+    );
+  }
   onStream?.({
     delta: "",
     text: outputText,
@@ -2937,7 +3005,8 @@ function createAiStreamReporter(feature) {
       type: "AI_STREAM_PROGRESS",
       feature,
       receivedCharacters: Number(progress.receivedCharacters) || 0,
-      done: progress.done === true
+      done: progress.done === true,
+      fallback: progress.fallback === true
     };
     chrome.runtime.sendMessage(message).catch(() => {});
     if (feature === "podcast_answer") {

@@ -1485,7 +1485,9 @@ function updateAiStreamProgress(message = {}) {
   if (message.feature === "content_map_correction") {
     elements.overviewCorrectionStatus.textContent = message.done
       ? "AI 已返回结果，正在核验结构和证据…"
-      : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+      : message.fallback
+        ? "流式响应中断，正在使用安全模式重新生成…"
+        : `DeepSeek 正在流式生成，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
     return;
   }
   if (!module || (module !== "insight" && !activeAiModules.has(module))) return;
@@ -1501,7 +1503,9 @@ function updateAiStreamProgress(message = {}) {
   if (!label) return;
   label.textContent = message.done
     ? "DeepSeek 已生成完成，正在校验并整理结果…"
-    : `DeepSeek 正在流式生成，已接收 ${Number(message.receivedCharacters) || 0} 字…`;
+    : message.fallback
+      ? "流式响应中断，正在使用安全模式重新生成…"
+      : `DeepSeek 正在流式生成，已生成 ${Number(message.receivedCharacters) || 0} 个字符…`;
 }
 
 async function generateFollowup() {
