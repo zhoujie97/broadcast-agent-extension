@@ -3,8 +3,9 @@
 一款面向 Bilibili 访谈、播客和长视频的 Edge 浏览器扩展。它可以读取视频字幕并生成智能稿本、内容地图、高光切片、人物资料、知识笔记和深度文章。
 
 ![](效果图/智能稿本.png)
-当前扩展版本：`v1.0.18`
+当前扩展版本：`v1.0.24`
 
+- [v1.0.19 版本说明](docs/v1.0.19-release-notes.md)
 - [v1.0.18 版本说明](docs/v1.0.18-release-notes.md)
 - [v1.0.17 版本说明](docs/v1.0.17-release-notes.md)
 - [v1.0.16 版本说明](docs/v1.0.16-release-notes.md)
@@ -59,7 +60,7 @@
 </div>
 
 
-- 开发者 Key 只保存在服务端；用户可选择在自己的浏览器中保存个人 DeepSeek Key
+- AI 功能仅使用用户自己的 DeepSeek Key，由插件直连 DeepSeek；无需后端
 
 ## 普通用户安装
 
@@ -72,7 +73,7 @@
 5. 选择解压后的扩展文件夹。
 6. 打开并刷新 Bilibili 视频页面，然后点击扩展图标。
 
-普通用户不需要下载整个源码仓库，也不需要填写 DeepSeek API Key。
+普通用户不需要下载整个源码仓库。AI 功能需要填写自己的 DeepSeek API Key；字幕阅读、笔记无需 Key。
 
 ## 从源码构建
 
@@ -81,8 +82,6 @@
 ```bash
 npm install
 
-API_BASE_URL=https://broadcast-agent-extension.vercel.app \
-RELEASE_VERSION=1.0.18 \
 npm run package:extension
 ```
 
@@ -93,29 +92,15 @@ dist/extension/
 dist/broadcast-agent-extension.zip
 ```
 
-开发环境也可以直接在浏览器扩展管理页加载仓库中的 `extension/`，但需要同时运行本地代理。具体配置见[扩展完整使用说明](extension/README.md)。
+开发环境也可以直接在浏览器扩展管理页加载仓库中的 `extension/`，无需运行本地代理。具体配置见[扩展完整使用说明](extension/README.md)。
 
 ## AI 服务配置
 
-扩展端不包含密钥。生产环境通过 Vercel 代理调用：
+在插件“AI 能力”中填写自己的 DeepSeek API Key。默认使用 `deepseek-v4-flash`，聊天及联网搜索由插件后台直接请求 DeepSeek，费用由用户账户承担。无开发者 Key、每日免费额度、注册接口或 Vercel 依赖。
 
-| 能力 | 服务 |
-| --- | --- |
-| 内容地图、切片、问答、重构、纠错 | DeepSeek |
-| 百度百科人物检索、延伸探索 | DeepSeek Web Search |
-| API Key、来源校验和限流 | Vercel Functions |
+默认仅当前浏览器会话保存 Key，用户可主动选择在此设备记住。测试 Key 也会产生少量调用费用。
 
-Vercel 至少需要配置：
-
-```text
-AI_MODEL=deepseek-v4-flash
-DEEPSEEK_API_KEY=你的 DeepSeek API Key
-SESSION_SIGNING_SECRET=至少 24 字符的随机字符串
-ALLOWED_EXTENSION_ORIGINS=chrome-extension://bfgmhgfjfhckjblpnhpmmeinecpceihe,chrome-extension://mdfjbiaoihgoamlkhjbhadmdocofhihp
-FREE_DAILY_CALLS_PER_FEATURE=2
-```
-
-修改 Vercel 环境变量后需要重新部署。当前 Edge 商店版运行时 ID 为 `bfgmhgfjfhckjblpnhpmmeinecpceihe`，本仓库 `dist/extension` 测试副本当前为 `mdfjbiaoihgoamlkhjbhadmdocofhihp`，因此验收期间需要同时允许两个 Origin。虽然只发布到 Edge，Chromium 内核的扩展 Origin 仍使用 `chrome-extension://`。Partner Center 中类似 `de7c88a5-3b71-49f6-8da9-3d89623c5531` 的 GUID 是商店产品 ID，不能用于 Origin 白名单。完整流程见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+如曾部署旧代理，必须下线旧服务并撤销旧开发者 Key；详见 [发布说明](DEPLOYMENT.md)。
 
 ## 本地验证
 
@@ -127,7 +112,7 @@ npm run check
 ## 隐私与安全
 
 - 不读取、保存或上传 Bilibili `SESSDATA`
-- 只有用户主动使用 AI 功能时，相关字幕和问题才会发送到代理
+- 只有用户主动使用 AI 功能时，相关字幕和问题才会直接发送到 DeepSeek
 - 开发者 API Key 不写入扩展源码或安装包；用户 Key 只由其浏览器保存
 - 笔记、稿本修正和生成结果保存在浏览器本地，并按视频隔离
 
@@ -136,7 +121,7 @@ npm run check
 - 视频没有可用中文字幕时，无法生成智能稿本
 - AI 字幕可能识别错字，需要使用稿本人名修正功能
 - 抖音歌曲只提供搜索跳转，不提供内嵌试听
-- 公开大规模使用前，建议为 Vercel 代理接入持久化限流并设置模型消费上限
+- AI 可用性受用户 Key、账户余额、网络及 DeepSeek 服务状态影响
 
 ## 反馈问题
 

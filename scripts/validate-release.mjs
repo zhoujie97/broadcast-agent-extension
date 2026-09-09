@@ -11,6 +11,7 @@ const requiredFiles = [
   "sidepanel.html",
   "sidepanel.css",
   "sidepanel.js",
+  "select-controls.js",
   "transcript-utils.js",
   "stream-utils.js",
   "person-utils.js",
@@ -32,6 +33,10 @@ if (manifest.manifest_version !== 3) throw new Error("必须使用 Manifest V3")
 if (!manifest.icons?.["128"]) throw new Error("缺少商店图标");
 if (manifest.name.includes("验证版")) throw new Error("生产包名称仍包含“验证版”");
 
+if (!manifest.host_permissions.includes("https://api.deepseek.com/*")) throw new Error("缺少 DeepSeek 直连权限");
+if (manifest.host_permissions.some((value) => /vercel|localhost|127\.0\.0\.1/u.test(value))) throw new Error("安装包仍依赖代理");
+const background = await fs.readFile(path.join(extensionDir, "background.js"), "utf8");
+if (/getProxySession|X-DeepSeek-API-Key|DEEPSEEK_API_KEY/u.test(background)) throw new Error("后台仍存在旧代理或开发者 Key 逻辑");
 const files = await listFiles(extensionDir);
 if (files.some((file) => path.basename(file) === ".DS_Store")) {
   throw new Error("生产包不应包含 .DS_Store");

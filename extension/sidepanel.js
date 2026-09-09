@@ -34,10 +34,10 @@ const elements = {
   testDeepseekKeyButton: document.querySelector("#test-deepseek-key-button"),
   saveDeepseekKeyButton: document.querySelector("#save-deepseek-key-button"),
   clearDeepseekKeyButton: document.querySelector("#clear-deepseek-key-button"),
-  quotaDialog: document.querySelector("#quota-dialog"),
-  quotaDialogMessage: document.querySelector("#quota-dialog-message"),
-  closeQuotaDialogButton: document.querySelector("#close-quota-dialog-button"),
-  laterQuotaButton: document.querySelector("#later-quota-button"),
+  keyRequiredDialog: document.querySelector("#key-required-dialog"),
+  keyRequiredDialogMessage: document.querySelector("#key-required-dialog-message"),
+  closeKeyRequiredDialogButton: document.querySelector("#close-key-required-dialog-button"),
+  laterKeyRequiredButton: document.querySelector("#later-key-required-button"),
   configureKeyButton: document.querySelector("#configure-key-button"),
   reviewAiConsentButton: document.querySelector("#review-ai-consent-button"),
   revokeAiConsentButton: document.querySelector("#revoke-ai-consent-button"),
@@ -73,6 +73,8 @@ const elements = {
   remixStyle: document.querySelector("#remix-style"),
   remixGuestField: document.querySelector("#remix-guest-field"),
   remixGuest: document.querySelector("#remix-guest"),
+  identifyRemixGuests: document.querySelector("#identify-remix-guests"),
+  remixGuestsStatus: document.querySelector("#remix-guests-status"),
   remixLength: document.querySelector("#remix-length"),
   generateRemixButton: document.querySelector("#generate-remix-button"),
   remixLoading: document.querySelector("#remix-loading"),
@@ -143,11 +145,11 @@ let activeInsightSelection = null;
 let insightRequestId = 0;
 let aiConsentResolver = null;
 const AI_CONSENT_KEY = "aiDataConsent";
-const AI_CONSENT_VERSION = 1;
+const AI_CONSENT_VERSION = 2;
 const activeAiModules = new Set();
 const moduleLoadingLabels = Object.freeze({
   overview: "正在划分主题、重建人物轨迹并提炼思想碎片…",
-  clips: "正在生成内容价值画像和传播场景建议…",
+  clips: "正在分析短视频传播价值…",
   remix: "正在构思结构并重写采访…",
   question: "正在检索采访上下文并回答…",
   followup: "正在联网检索并核对相关内容…",
@@ -174,6 +176,7 @@ elements.generateFollowupButton.addEventListener("click", generateFollowup);
 elements.copyRemixButton.addEventListener("click", copyRemix);
 elements.remixStyle.addEventListener("change", handleRemixControlChange);
 elements.remixGuest.addEventListener("change", loadSelectedRemix);
+elements.identifyRemixGuests.addEventListener("click", identifyRemixGuests);
 elements.remixLength.addEventListener("change", loadSelectedRemix);
 elements.questionForm.addEventListener("submit", askPodcast);
 elements.noteForm.addEventListener("submit", saveManualNote);
@@ -216,12 +219,12 @@ elements.clearAllDataButton.addEventListener("click", clearAllLocalData);
 elements.deepseekKeyForm.addEventListener("submit", saveDeepSeekKey);
 elements.testDeepseekKeyButton.addEventListener("click", testDeepSeekKey);
 elements.clearDeepseekKeyButton.addEventListener("click", clearDeepSeekKey);
-elements.closeQuotaDialogButton.addEventListener("click", closeQuotaDialog);
-elements.laterQuotaButton.addEventListener("click", closeQuotaDialog);
-elements.configureKeyButton.addEventListener("click", openKeySettingsFromQuota);
-elements.quotaDialog.addEventListener("cancel", (event) => {
+elements.closeKeyRequiredDialogButton.addEventListener("click", closeKeyRequiredDialog);
+elements.laterKeyRequiredButton.addEventListener("click", closeKeyRequiredDialog);
+elements.configureKeyButton.addEventListener("click", openKeySettingsFromPrompt);
+elements.keyRequiredDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
-  closeQuotaDialog();
+  closeKeyRequiredDialog();
 });
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -279,8 +282,8 @@ async function readAiConsent() {
 async function updateAiConsentState() {
   const granted = await readAiConsent();
   elements.aiConsentState.textContent = granted
-    ? "已授权云端 AI；字幕仅在你主动使用 AI 功能时发送。"
-    : "尚未授权云端 AI，字幕不会发送到 AI 服务。";
+    ? "已授权，生成时向 DeepSeek 发送相关字幕。"
+    : "首次生成时确认数据授权。";
   elements.revokeAiConsentButton.hidden = !granted;
   return granted;
 }
@@ -315,6 +318,11 @@ async function grantAiConsent() {
 }
 
 async function ensureAiConsent() {
+  const status = await chrome.runtime.sendMessage({ type: "GET_DEEPSEEK_KEY_STATUS" });
+  if (!status?.configured) {
+    showKeyRequiredDialog();
+    return false;
+  }
   if (await readAiConsent()) return true;
   if (aiConsentResolver) return false;
   showAiConsentDialog();
@@ -379,43 +387,39 @@ async function loadDeepSeekKeyStatus() {
   elements.deepseekKeyStatus.classList.remove("error", "success");
   elements.clearDeepseekKeyButton.hidden = !response.configured;
   elements.deepseekKeyRemember.checked = response.storage === "local";
+  await loadAiStatus();
   if (response.configured) {
     elements.deepseekKeyStatus.textContent =
-      `已配置 ${response.masked}，当前 AI 请求使用你的 DeepSeek 账户。`;
+      `已保存 ${response.masked}`;
     elements.deepseekKeyStatus.classList.add("success");
   } else {
     elements.deepseekKeyStatus.textContent =
-      "未配置，当前使用每个功能每天 2 次的免费额度。";
+      "";
   }
 }
 
-function isDailyFeatureQuotaError(error) {
-  return /(?:DAILY_FEATURE_QUOTA_EXCEEDED|该功能今日\s*\d+\s*次免费额度已用完)/u.test(
-    String(error?.message || error || "")
-  );
+function isMissingKeyError(error) {
+  return error?.code === "USER_API_KEY_REQUIRED" || /请先填写自己的 DeepSeek API Key/u.test(String(error?.message || error || ""));
 }
 
-function showQuotaDialog(error) {
-  const message = String(error?.message || "");
-  elements.quotaDialogMessage.textContent = message.includes("免费额度已用完")
-    ? message.replace(/请在“AI 能力”中填写自己的 DeepSeek API Key。?$/u, "你可以明天继续使用，或者填写自己的 DeepSeek API Key。")
-    : "该功能每天可免费使用 2 次。你可以明天继续使用，或者填写自己的 DeepSeek API Key。";
-  if (!elements.quotaDialog.open) elements.quotaDialog.showModal();
+function showKeyRequiredDialog() {
+  elements.keyRequiredDialogMessage.textContent = "填写个人 DeepSeek API Key 后即可生成，费用由你的账户承担。";
+  if (!elements.keyRequiredDialog.open) elements.keyRequiredDialog.showModal();
 }
 
-function handleQuotaError(error, inlineElement = null) {
-  if (!isDailyFeatureQuotaError(error)) return false;
+function handleMissingKeyError(error, inlineElement = null) {
+  if (!isMissingKeyError(error)) return false;
   if (inlineElement) inlineElement.hidden = true;
-  showQuotaDialog(error);
+  showKeyRequiredDialog(error);
   return true;
 }
 
-function closeQuotaDialog() {
-  if (elements.quotaDialog.open) elements.quotaDialog.close();
+function closeKeyRequiredDialog() {
+  if (elements.keyRequiredDialog.open) elements.keyRequiredDialog.close();
 }
 
-function openKeySettingsFromQuota() {
-  closeQuotaDialog();
+function openKeySettingsFromPrompt() {
+  closeKeyRequiredDialog();
   elements.aiSettings.open = true;
   elements.aiSettings.scrollIntoView({ behavior: "smooth", block: "start" });
   window.setTimeout(() => elements.deepseekKeyInput.focus(), 250);
@@ -437,7 +441,7 @@ async function testDeepSeekKey() {
       apiKey
     });
     if (!response?.ok) throw new Error(response?.error?.message || "Key 验证失败。");
-    elements.deepseekKeyStatus.textContent = "Key 验证成功，可以保存使用。";
+    elements.deepseekKeyStatus.textContent = "验证成功，可保存。";
     elements.deepseekKeyStatus.classList.add("success");
   } catch (error) {
     elements.deepseekKeyStatus.textContent = error.message;
@@ -508,23 +512,18 @@ async function loadAiStatus() {
     const response = await chrome.runtime.sendMessage({ type: "GET_AI_STATUS" });
     aiAvailable = response?.available === true;
     aiModelName = response?.model || "云端模型";
-    if (!aiAvailable) {
-      setAiStatus(
-        response?.message || "AI API 代理未连接，请先启动或部署代理。",
-        true
-      );
-    }
+    setAiStatus("", false);
   } catch (error) {
     aiAvailable = false;
-    setAiStatus(`无法检测 AI API 代理：${error.message}`, true);
+    setAiStatus(`无法读取 DeepSeek 配置：${error.message}`, true);
   }
   updateAiConfigState();
 }
 
 function updateAiConfigState() {
   elements.aiConfigState.textContent = aiAvailable
-    ? `${aiModelName} 可用`
-    : "AI 服务未连接";
+    ? "已配置"
+    : "未配置";
   elements.aiConfigState.classList.toggle("configured", aiAvailable);
   const transcriptUnavailable = transcriptSegments.length === 0;
   elements.generateOverviewButton.disabled = transcriptUnavailable;
@@ -620,12 +619,7 @@ async function loadTranscript() {
   elements.status.hidden = true;
   elements.reloadButton.disabled = false;
 
-  setAiStatus(
-    aiAvailable
-      ? ""
-      : "AI API 代理未连接，请先启动或部署代理。",
-    !aiAvailable
-  );
+  setAiStatus("", false);
 }
 
 async function loadTranscriptCorrections() {
@@ -689,9 +683,9 @@ async function saveTranscriptCorrection(event) {
   renderTranscriptCorrections();
   elements.transcriptWrongName.value = "";
   elements.transcriptCorrectName.value = "";
-  await invalidateGeneratedContentAfterTranscriptEdit();
+  await notifyGeneratedContentAfterTranscriptEdit();
   showTranscriptCorrectionStatus(
-    `已将“${from}”改为“${to}”，当前稿本共替换 ${replacementCount} 处；请重新生成需要的 AI 内容。`,
+    `已将“${from}”改为“${to}”，当前稿本共替换 ${replacementCount} 处；已有 AI 内容已保留，可按需重新生成。`,
     false
   );
 }
@@ -722,9 +716,9 @@ async function removeTranscriptCorrection(index) {
   const replacementCount = rebuildCorrectedTranscript();
   renderTranscript(transcriptSegments);
   renderTranscriptCorrections();
-  await invalidateGeneratedContentAfterTranscriptEdit();
+  await notifyGeneratedContentAfterTranscriptEdit();
   showTranscriptCorrectionStatus(
-    `已撤销“${removed.from} → ${removed.to}”；当前仍应用 ${replacementCount} 处替换。`,
+    `已撤销“${removed.from} → ${removed.to}”；当前仍应用 ${replacementCount} 处替换；已有 AI 内容已保留，可按需重新生成。`,
     false
   );
 }
@@ -735,30 +729,8 @@ function showTranscriptCorrectionStatus(message, isError) {
   elements.transcriptCorrectionStatus.hidden = false;
 }
 
-async function invalidateGeneratedContentAfterTranscriptEdit() {
-  const marker = `:${currentVideo?.bvid || "unknown"}:${currentVideo?.cid || "unknown"}`;
-  const local = await chrome.storage.local.get(null);
-  const localKeys = Object.keys(local).filter((key) =>
-    key.includes(marker) &&
-    !key.startsWith("timelineNotes:") &&
-    !key.startsWith("transcriptNameCorrectionsV1:")
-  );
-  if (localKeys.length) await chrome.storage.local.remove(localKeys);
-  const session = await chrome.storage.session.get(null);
-  const sessionKeys = Object.keys(session).filter((key) =>
-    key.includes(marker) && key.startsWith("segmentInsight:")
-  );
-  if (sessionKeys.length) await chrome.storage.session.remove(sessionKeys);
-  currentOverview = null;
-  currentClipRadar = null;
-  currentRemix = null;
-  elements.overviewOutput.hidden = true;
-  elements.clipsOutput.hidden = true;
-  elements.remixOutput.hidden = true;
-  elements.followupOutput.hidden = true;
-  elements.generateOverviewButton.textContent = "生成内容地图";
-  elements.generateClipsButton.textContent = "分析内容价值";
-  elements.generateFollowupButton.textContent = "生成延伸探索";
+async function notifyGeneratedContentAfterTranscriptEdit() {
+  setAiStatus("稿本人名已修改，已有 AI 内容已保留；如需更新，可在对应功能中重新生成。", false);
 }
 
 function renderTranscript(segments) {
@@ -881,7 +853,7 @@ async function generateOverview() {
     await loadSelectedRemix();
     elements.generateOverviewButton.textContent = "重新生成内容地图";
   } catch (error) {
-    if (handleQuotaError(error, elements.overviewError)) return;
+    if (handleMissingKeyError(error, elements.overviewError)) return;
     elements.overviewError.textContent = error.message;
     elements.overviewError.hidden = false;
   } finally {
@@ -934,13 +906,13 @@ async function correctOverview(event) {
     elements.overviewCorrectionStatus.textContent =
       `已核实并修正：${response.explanation || "问题成立。"}`;
   } catch (error) {
-    if (handleQuotaError(error, elements.overviewCorrectionStatus)) return;
+    if (handleMissingKeyError(error, elements.overviewCorrectionStatus)) return;
     elements.overviewCorrectionStatus.textContent = error.message;
     elements.overviewCorrectionStatus.classList.add("error");
   } finally {
     elements.overviewCorrectionButton.disabled = false;
     elements.overviewCorrectionButton.textContent = "核实并修正";
-    elements.overviewCorrectionStatus.hidden = elements.quotaDialog.open;
+    elements.overviewCorrectionStatus.hidden = elements.keyRequiredDialog.open;
   }
 }
 
@@ -1151,7 +1123,7 @@ async function generateClipCandidates() {
     });
     elements.generateClipsButton.textContent = "重新分析内容价值";
   } catch (error) {
-    if (handleQuotaError(error, elements.clipsError)) return;
+    if (handleMissingKeyError(error, elements.clipsError)) return;
     elements.clipsError.textContent = error.message;
     elements.clipsError.hidden = false;
   } finally {
@@ -1169,7 +1141,7 @@ function isRenderableClipRadar(result) {
       Number(clip?.to) > Number(clip?.from) + 3 &&
       String(clip?.title || "").trim() &&
       Array.isArray(clip?.bgmSuggestions) &&
-      clip.bgmSuggestions.length === 3
+      clip.bgmSuggestions.length >= 2
     ).length >= 5
   );
 }
@@ -1240,35 +1212,26 @@ function createClipCard(clip) {
 
   const quote = document.createElement("blockquote");
   quote.className = "clip-quote";
-  quote.textContent = clip.quote || "";
+  quote.textContent = clip.quote ? `“${String(clip.quote).replace(/^[“”"]+|[“”"]+$/gu, "")}”` : "";
   const reason = document.createElement("p");
   reason.className = "clip-reason";
   reason.textContent = clip.whyRecommended || "";
 
-  const signals = document.createElement("div");
-  signals.className = "clip-signals";
-  for (const signalText of Array.isArray(clip.signals) ? clip.signals : []) {
-    const signal = document.createElement("span");
-    signal.textContent = signalText;
-    signals.append(signal);
-  }
-
   const details = document.createElement("details");
   details.className = "clip-details";
   const summary = document.createElement("summary");
-  summary.textContent = "查看内容价值画像与利用建议";
+  summary.textContent = "制作切片建议";
   const plan = document.createElement("div");
   plan.className = "clip-plan";
   plan.append(
-    createClipScoreAnalysis(clip),
     createScenarioAnalysis(clip),
     clipPlanRow("话题", (clip.topics || []).map((topic) => `#${topic}`).join(" ")),
     createBgmRecommendations(clip)
   );
   details.append(summary, plan);
-  card.append(top, title, range, quote, reason);
-  if (signals.childElementCount) card.append(signals);
-  card.append(details);
+  top.append(range);
+  card.append(top, title, quote, reason);
+  card.append(createClipScoreAnalysis(clip), details);
   return card;
 }
 
@@ -1278,85 +1241,33 @@ function createClipScoreAnalysis(clip) {
   const heading = document.createElement("h4");
   heading.textContent = "内容价值画像";
   const portrait = document.createElement("div");
-  portrait.className = "clip-value-portrait";
+  portrait.className = "clip-metrics";
   const metrics = [
-    { key: "emotionalIntensity", label: "情绪浓度", angle: -90, labelX: 180, labelY: 22 },
-    { key: "storyTension", label: "故事张力", angle: -18, labelX: 310, labelY: 103 },
-    { key: "spreadPotential", label: "传播潜力", angle: 54, labelX: 286, labelY: 258 },
-    { key: "practicalInspiration", label: "实践启发", angle: 126, labelX: 74, labelY: 258 },
-    { key: "depthOfThought", label: "深度思考", angle: 198, labelX: 50, labelY: 103 }
+    ["spreadPotential", "传播潜力"], ["emotionalIntensity", "情绪浓度"],
+    ["storyTension", "故事张力"],
+    ["depthOfThought", "思考深度"]
   ];
-  const center = { x: 180, y: 145 };
-  const radius = 84;
-  const pointAt = (angle, distance) => {
-    const radians = angle * Math.PI / 180;
-    return {
-      x: center.x + Math.cos(radians) * distance,
-      y: center.y + Math.sin(radians) * distance
-    };
-  };
-  const pointString = (points) =>
-    points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.classList.add("clip-radar-chart");
-  svg.setAttribute("viewBox", "0 0 360 290");
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "五维内容价值雷达图");
-  for (const level of [0.25, 0.5, 0.75, 1]) {
-    const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-    polygon.classList.add("radar-grid");
-    polygon.setAttribute(
-      "points",
-      pointString(metrics.map((metric) => pointAt(metric.angle, radius * level)))
-    );
-    svg.append(polygon);
+  for (const [key, label] of metrics) {
+    const row = document.createElement("div");
+    row.className = "clip-metric";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const score = Math.min(100, Math.max(0, Number(clip.scores?.[key]) || 0));
+    const meter = document.createElement("meter");
+    meter.min = 0;
+    meter.max = 100;
+    meter.value = score;
+    meter.setAttribute("aria-label", label);
+    const value = document.createElement("span");
+    value.className = "clip-metric-value";
+    value.textContent = (score / 10).toFixed(1);
+    row.append(name, meter, value);
+    portrait.append(row);
+    const explanation = document.createElement("p");
+    explanation.className = "clip-metric-reason";
+    explanation.textContent = clip.scoreReasons?.[key] || "旧版结果未记录此项评分依据，可重新生成查看。";
+    portrait.append(explanation);
   }
-  for (const metric of metrics) {
-    const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    const endpoint = pointAt(metric.angle, radius);
-    axis.classList.add("radar-axis");
-    axis.setAttribute("x1", center.x);
-    axis.setAttribute("y1", center.y);
-    axis.setAttribute("x2", endpoint.x);
-    axis.setAttribute("y2", endpoint.y);
-    svg.append(axis);
-  }
-  const values = metrics.map((metric) =>
-    Math.min(100, Math.max(0, Number(clip.scores?.[metric.key]) || 0))
-  );
-  const dataPoints = metrics.map((metric, index) =>
-    pointAt(metric.angle, radius * values[index] / 100)
-  );
-  const area = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
-  area.classList.add("radar-area");
-  area.setAttribute("points", pointString(dataPoints));
-  svg.append(area);
-  dataPoints.forEach((point) => {
-    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dot.classList.add("radar-dot");
-    dot.setAttribute("cx", point.x);
-    dot.setAttribute("cy", point.y);
-    dot.setAttribute("r", "3.5");
-    svg.append(dot);
-  });
-  metrics.forEach((metric, index) => {
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.classList.add("radar-label");
-    label.setAttribute("x", metric.labelX);
-    label.setAttribute("y", metric.labelY);
-    label.setAttribute("text-anchor", "middle");
-    const name = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
-    name.textContent = metric.label;
-    name.setAttribute("x", metric.labelX);
-    const value = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
-    value.classList.add("radar-value");
-    value.textContent = (values[index] / 10).toFixed(1);
-    value.setAttribute("x", metric.labelX);
-    value.setAttribute("dy", "17");
-    label.append(name, value);
-    svg.append(label);
-  });
-  portrait.append(svg);
   const summary = document.createElement("p");
   summary.className = "clip-portrait-summary";
   summary.textContent = clip.valuePortrait ||
@@ -1369,18 +1280,15 @@ function createScenarioAnalysis(clip) {
   const section = document.createElement("section");
   section.className = "clip-scenarios";
   const heading = document.createElement("h4");
-  heading.textContent = "适配场景与推荐标题";
+  heading.textContent = "标题与画面剪辑";
   section.append(heading);
-  for (const scenario of Array.isArray(clip.scenarios) ? clip.scenarios : []) {
+  for (const scenario of (Array.isArray(clip.scenarios) ? clip.scenarios : []).filter(item => item.type === "短视频传播").slice(0, 1)) {
     const item = document.createElement("article");
-    const meta = document.createElement("p");
-    meta.className = "clip-scenario-meta";
-    meta.textContent = `${scenario.type || "内容利用"} · 适配度 ${scenario.fit}`;
     const title = document.createElement("strong");
     title.textContent = scenario.title || clip.title;
     const advice = document.createElement("p");
     advice.textContent = scenario.advice || "";
-    item.append(meta, title, advice);
+    item.append(title, advice);
     section.append(item);
   }
   return section;
@@ -1398,10 +1306,10 @@ function createBgmRecommendations(clip) {
   const section = document.createElement("section");
   section.className = "clip-bgm-recommendations";
   const heading = document.createElement("h4");
-  heading.textContent = "BGM 歌曲推荐";
+  heading.textContent = "配乐参考";
   section.append(heading);
   for (const bgm of Array.isArray(clip.bgmSuggestions)
-    ? clip.bgmSuggestions
+    ? clip.bgmSuggestions.slice(0, 2)
     : []) {
     const item = document.createElement("div");
     item.className = "clip-bgm-item";
@@ -1434,16 +1342,15 @@ function formatClipPlan(clip) {
     emotionalIntensity: "情绪浓度",
     depthOfThought: "深度思考",
     storyTension: "故事张力",
-    practicalInspiration: "实践启发",
     spreadPotential: "传播潜力"
   };
   const portraitText = Object.entries(portraitLabels).map(([key, label]) =>
-    `${label} ${((Number(clip.scores?.[key]) || 0) / 10).toFixed(1)}`
+    `${label} ${((Number(clip.scores?.[key]) || 0) / 10).toFixed(1)}：${clip.scoreReasons?.[key] || "旧版结果未记录评分依据"}`
   ).join("\n");
-  const scenarioText = (clip.scenarios || []).map((scenario) =>
-    `${scenario.type}（${scenario.fit}）：${scenario.title}；${scenario.advice}`
+  const scenarioText = (clip.scenarios || []).filter(scenario => scenario.type === "短视频传播").map((scenario) =>
+    `${scenario.type}：${scenario.title}；${scenario.advice}`
   ).join("\n");
-  const bgmText = (clip.bgmSuggestions || []).map((bgm, index) =>
+  const bgmText = (clip.bgmSuggestions || []).slice(0, 2).map((bgm, index) =>
     `BGM 歌曲 ${index + 1}：${bgm.title} — ${bgm.artist}；${bgm.reason}\n` +
     `抖音搜索：${douyinBgmSearchUrl(bgm)}`
   ).join("\n");
@@ -1452,7 +1359,6 @@ function formatClipPlan(clip) {
     `区间：${formatTime(clip.from)} – ${formatTime(clip.to)}`,
     `类型：${clip.type}`,
     `推荐理由：${clip.whyRecommended}`,
-    `判断信号：${(clip.signals || []).join("、")}`,
     portraitText,
     `内容价值画像：${clip.valuePortrait || ""}`,
     scenarioText,
@@ -1673,7 +1579,7 @@ async function generateFollowup() {
     });
     elements.generateFollowupButton.textContent = "重新生成延伸探索";
   } catch (error) {
-    if (handleQuotaError(error, elements.followupError)) return;
+    if (handleMissingKeyError(error, elements.followupError)) return;
     elements.followupError.textContent = error.message;
     elements.followupError.hidden = false;
   } finally {
@@ -1873,7 +1779,7 @@ async function generateRemix() {
       )]: response.remix
     });
   } catch (error) {
-    if (handleQuotaError(error, elements.remixError)) return;
+    if (handleMissingKeyError(error, elements.remixError)) return;
     elements.remixError.classList.remove("info");
     elements.remixError.textContent = error.message;
     elements.remixError.hidden = false;
@@ -1948,7 +1854,7 @@ function updateRemixGuestOptions(overview = currentOverview) {
   if (!names.length) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "生成时自动识别嘉宾";
+    option.textContent = "请先识别嘉宾";
     elements.remixGuest.append(option);
   } else {
     for (const name of names) {
@@ -1962,11 +1868,41 @@ function updateRemixGuestOptions(overview = currentOverview) {
   updateRemixGuestControl();
 }
 
+async function identifyRemixGuests() {
+  if (elements.identifyRemixGuests.disabled) return;
+  if (!currentVideo || !transcriptSegments.length) {
+    elements.remixGuestsStatus.textContent = "请先加载视频字幕。";
+    return;
+  }
+  if (!(await ensureAiConsent())) return;
+  const videoKey = videoStorageKey("identifiedPeopleV1");
+  elements.identifyRemixGuests.disabled = true;
+  elements.remixGuestsStatus.textContent = "正在识别嘉宾…";
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "IDENTIFY_REMIX_GUESTS",
+      payload: { video: currentVideo, segments: transcriptForAi() }
+    });
+    if (videoStorageKey("identifiedPeopleV1") !== videoKey) return;
+    if (!response?.ok) throw new Error(response?.error?.message || "嘉宾识别失败，请重试。");
+    if (!(await applyIdentifiedPeople(response.people))) throw new Error("未识别到嘉宾，请检查字幕后重试。");
+    elements.remixGuestsStatus.textContent = "嘉宾已识别，可以选择后生成作品。";
+    await loadSelectedRemix();
+  } catch (error) {
+    if (videoStorageKey("identifiedPeopleV1") === videoKey) {
+      elements.remixGuestsStatus.textContent = error.message;
+    }
+  } finally {
+    elements.identifyRemixGuests.disabled = false;
+  }
+}
+
 function updateRemixGuestControl() {
   const personSpecific = ContentUtils.PERSON_SPECIFIC_REMIX_STYLES.has(
     elements.remixStyle.value
   );
   elements.remixGuestField.hidden = !personSpecific;
+  elements.identifyRemixGuests.hidden = getIntervieweeNames().length > 0;
   elements.remixGuest.disabled = !personSpecific || elements.remixGuest.options.length <= 1;
 }
 
@@ -2122,7 +2058,7 @@ async function askPodcast(event) {
     renderNotes();
     elements.questionInput.value = "";
   } catch (error) {
-    if (handleQuotaError(error, elements.questionError)) return;
+    if (handleMissingKeyError(error, elements.questionError)) return;
     elements.questionError.textContent = error.message;
     elements.questionError.hidden = false;
   } finally {
@@ -2242,7 +2178,7 @@ async function requestSelectionInsight(segment, selectedText, force = false) {
     });
   } catch (error) {
     if (requestId === insightRequestId) {
-      if (!handleQuotaError(error, elements.insightError)) {
+      if (!handleMissingKeyError(error, elements.insightError)) {
         showInsightError(error.message || "AI 选中文字解释失败。");
       }
     }
@@ -2255,7 +2191,7 @@ async function requestSelectionInsight(segment, selectedText, force = false) {
 
   if (!response?.ok) {
     const error = new Error(response?.error?.message || "AI 选中文字解释失败。");
-    if (!handleQuotaError(error, elements.insightError)) {
+    if (!handleMissingKeyError(error, elements.insightError)) {
       showInsightError(error.message);
     }
     return;
