@@ -2,13 +2,11 @@ importScripts("person-utils.js", "content-utils.js", "stream-utils.js");
 
 const SUPPORTED_VIDEO_URL = /^https:\/\/www\.bilibili\.com\/video\/BV[a-zA-Z0-9]+/;
 const AI_CONFIG = Object.freeze({
-  // Production builds should replace this with the deployed HTTPS proxy URL.
-  // Never hard-code developer or user API keys in the extension source.
-  proxyUrl: "http://127.0.0.1:8787/v1/chat/completions",
+  chatUrl: "https://api.deepseek.com/chat/completions",
+  searchUrl: "https://api.deepseek.com/anthropic/v1/messages",
+  model: "deepseek-v4-flash",
   defaultMaxTokens: 4096
 });
-const PROXY_INSTALLATION_KEY = "proxyInstallationId";
-const PROXY_SESSION_KEY = "proxyAnonymousSession";
 const DEEPSEEK_USER_KEY_LOCAL = "deepseekUserApiKey";
 const DEEPSEEK_USER_KEY_SESSION = "deepseekUserApiKeySession";
 const WEB_SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -34,7 +32,7 @@ function setStorageAccessLevel(storageArea, accessLevel) {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.remove("aiConfig").catch(() => {});
-  chrome.storage.local.remove("aiPreferences").catch(() => {});
+  chrome.storage.local.remove(["aiPreferences", "proxyInstallationId", "proxyAnonymousSession"]).catch(() => {});
   Promise.all([
     caches.delete("webllm/model"),
     caches.delete("webllm/config"),
@@ -220,6 +218,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "IDENTIFY_REMIX_GUESTS") {
+    identifyInterviewPeople(message.payload)
+      .then((people) => sendResponse({ ok: true, people }))
+      .catch((error) => sendResponse(toFailure(error)));
+    return true;
+  }
+
   if (message?.type === "EXPLAIN_SEGMENT") {
     explainSegment(message.payload, message.force === true)
       .then(sendResponse)
@@ -334,30 +339,9 @@ async function setCorrectedTranscript(payload = {}) {
 }
 
 async function getAiServiceStatus() {
-  const healthUrl = new URL("/health", AI_CONFIG.proxyUrl).href;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const response = await fetch(healthUrl, {
-      cache: "no-store",
-      signal: controller.signal
-    });
-    const payload = await response.json();
-    return {
-      ok: response.ok && payload?.ok === true,
-      available: response.ok && payload?.ok === true,
-      model: payload?.model || "云端模型"
-    };
-  } catch (error) {
-    return {
-      ok: true,
-      available: false,
-      model: "云端模型",
-      message: `无法连接 AI API 代理：${error.message || "Failed to fetch"}`
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  const configured = Boolean(await getDeepSeekUserKey());
+  return { ok: true, available: configured, model: AI_CONFIG.model,
+    message: configured ? "已配置个人 Key，实际可用性以 DeepSeek 返回为准。" : "请在 AI 能力中填写自己的 DeepSeek API Key。" };
 }
 
 function normalizeDeepSeekUserKey(value) {
@@ -416,19 +400,16 @@ async function clearDeepSeekUserKey() {
 
 async function testDeepSeekUserKey(value) {
   const apiKey = normalizeDeepSeekUserKey(value);
-  const session = await getProxySession();
-  const response = await fetch(AI_CONFIG.proxyUrl, {
+  const response = await fetch(AI_CONFIG.chatUrl, {
     method: "POST",
+    redirect: "error",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${session.token}`,
-      "X-Installation-ID": session.installationId,
-      "X-AI-Feature": "key_test",
-      "X-AI-Action-ID": crypto.randomUUID().replace(/-/gu, ""),
-      "X-DeepSeek-API-Key": apiKey,
-      "X-Request-ID": crypto.randomUUID()
+      Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
+      model: AI_CONFIG.model,
+      thinking: { type: "disabled" },
       messages: [{ role: "user", content: "只回复 OK" }],
       temperature: 0,
       max_tokens: 4,
@@ -897,33 +878,41 @@ async function generateClipCandidates(payload = {}) {
                   emotionalIntensity: { type: "number" },
                   depthOfThought: { type: "number" },
                   storyTension: { type: "number" },
-                  practicalInspiration: { type: "number" },
                   spreadPotential: { type: "number" }
                 },
-                required: ["emotionalIntensity", "depthOfThought", "storyTension", "practicalInspiration", "spreadPotential"]
+                required: ["emotionalIntensity", "depthOfThought", "storyTension", "spreadPotential"]
+              },
+              scoreReasons: {
+                type: "object", additionalProperties: false,
+                properties: {
+                  emotionalIntensity: { type: "string" }, depthOfThought: { type: "string" },
+                  storyTension: { type: "string" }, spreadPotential: { type: "string" }
+                },
+                required: ["emotionalIntensity", "depthOfThought", "storyTension", "spreadPotential"]
               },
               valuePortrait: { type: "string" },
               whyRecommended: { type: "string" },
               signals: { type: "array", items: { type: "string" } },
               scenarios: {
                 type: "array",
+                minItems: 1,
+                maxItems: 1,
                 items: {
                   type: "object",
                   additionalProperties: false,
                   properties: {
-                    type: { type: "string" },
-                    fit: { type: "string" },
+                    type: { type: "string", enum: ["短视频传播"] },
                     title: { type: "string" },
                     advice: { type: "string" }
                   },
-                  required: ["type", "fit", "title", "advice"]
+                  required: ["type", "title", "advice"]
                 }
               },
               topics: { type: "array", items: { type: "string" } },
               bgmSuggestions: {
                 type: "array",
-                minItems: 3,
-                maxItems: 3,
+                minItems: 2,
+                maxItems: 2,
                 items: {
                   type: "object",
                   additionalProperties: false,
@@ -938,7 +927,7 @@ async function generateClipCandidates(payload = {}) {
             },
             required: [
               "from", "to", "type", "title", "quote", "scores", "valuePortrait",
-              "whyRecommended", "signals", "scenarios",
+              "whyRecommended", "signals", "scenarios", "scoreReasons",
               "topics", "bgmSuggestions"
             ]
           }
@@ -947,7 +936,7 @@ async function generateClipCandidates(payload = {}) {
       required: ["intro", "clips"]
     },
     instructions:
-      "你是长内容价值分析师，不是单纯的短视频剪辑助手。请从完整原声文稿中识别8至10个彼此不重复、最值得观看、理解或二次利用的关键内容节点。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。五项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，practicalInspiration评估能否转化为行动或方法启发，spreadPotential评估传播与讨论潜力。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 只保留短视频传播、深度文章两种场景，fit只能为高、中、低，并分别给出推荐标题和简短适配建议，不要出现任何平台名称。topics 和 bgmSuggestions 仅服务于短视频场景。每个片段必须推荐三首彼此不同、真实存在且可在抖音搜索的歌曲。title 必须填写歌曲正式名称，artist 必须填写准确歌手或音乐人；reason 只说明歌曲的情绪、节奏和内容气质为什么适合当前片段，不要给出任何切入时间、播放位置、使用步骤或‘高潮处播放’之类的建议。优先选择辨识度较高、适合作为短视频背景音乐且容易按歌名与歌手检索的歌曲，但不要声称歌曲当前热门，不得编造歌名或歌手。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
+      "你是短视频传播与剪辑分析师。请从完整原声文稿中识别8至10个彼此不重复、最适合剪辑为短视频传播的关键片段。type 必须且只能是情绪共鸣、认知突破、金句传播、故事高潮、争议观点之一。每个区间应包含必要背景、观点展开和自然收尾，通常30至180秒；from 和 to 必须取自逐字稿已有时间边界。四项 scores 均为0至100：emotionalIntensity评估情绪浓度，depthOfThought评估思考深度，storyTension评估故事冲突、转折与叙事张力，spreadPotential评估传播与讨论潜力。scoreReasons 必须逐项解释四个评分，每项40至80字，结合本片段具体原句、情绪转折或上下文说明得分依据与不足，不能只复述分数或泛泛夸赞，不得编造证据。valuePortrait 用一句自然中文概括该片段的内容人格，例如‘这是一个高情绪、高故事、高共鸣的转折片段，更适合需要心理支持与人生经验的观众’，不要复述分数。whyRecommended 用一段话说明推荐逻辑；signals 从观点转折、个人经历、情绪变化、普适价值、具体案例、冲突张力、表达凝练等信号中选择2至5项。scenarios 必须且只包含一个短视频传播场景，禁止深度文章场景；不输出适配度，给出推荐标题和简短剪辑传播建议（包括开场钩子、画面取舍、镜头衔接、字幕重点和收尾），只能基于字幕提出可选剪辑方案，不得声称看到未提供的画面；advice 为80至150字，不要出现任何平台名称。topics 和 bgmSuggestions 仅服务于短视频场景。每个片段必须推荐两首彼此不同、真实存在且可在抖音搜索的歌曲。title 必须填写歌曲正式名称，artist 必须填写准确歌手或音乐人；reason 只说明歌曲的情绪、节奏和内容气质为什么适合当前片段，不要给出任何切入时间、播放位置、使用步骤或‘高潮处播放’之类的建议。优先选择辨识度较高、适合作为短视频背景音乐且容易按歌名与歌手检索的歌曲，但不要声称歌曲当前热门，不得编造歌名或歌手。quote 必须是文稿原句。不得为了制造爆点夸大、歪曲或拼接人物原意。intro 应概括本期内容价值分布，而不是宣传口号。",
     input: JSON.stringify({
       videoTitle: payload.video?.title || "",
       duration: Number(payload.video?.duration) || null,
@@ -1006,13 +995,12 @@ function normalizeClipCandidates(result, segments) {
       : `${sourceText.slice(0, 76)}${sourceText.length > 76 ? "…" : ""}`;
     const scoreKeys = [
       "emotionalIntensity", "depthOfThought", "storyTension",
-      "practicalInspiration", "spreadPotential"
+      "spreadPotential"
     ];
     const legacyScoreKeys = {
       emotionalIntensity: "emotionalImpact",
       depthOfThought: "cognitiveValue",
       storyTension: "completeness",
-      practicalInspiration: "independence",
       spreadPotential: "spreadPotential"
     };
     const scores = Object.fromEntries(scoreKeys.map((key) => [
@@ -1023,15 +1011,14 @@ function normalizeClipCandidates(result, segments) {
       )))
     ]));
     const valueScore = Math.round(
-      scores.emotionalIntensity * 0.17 +
-      scores.depthOfThought * 0.23 +
-      scores.storyTension * 0.19 +
-      scores.practicalInspiration * 0.18 +
-      scores.spreadPotential * 0.23
+      scores.emotionalIntensity * 0.20 +
+      scores.depthOfThought * 0.20 +
+      scores.storyTension * 0.25 +
+      scores.spreadPotential * 0.35
     );
     const allowedTypes = ["情绪共鸣", "认知突破", "金句传播", "故事高潮", "争议观点"];
     const type = allowedTypes.includes(raw.type) ? raw.type : "认知突破";
-    const scenarioTypes = ["短视频传播", "深度文章"];
+    const scenarioTypes = ["短视频传播"];
     const scenariosByType = new Map(
       (Array.isArray(raw.scenarios) ? raw.scenarios : [])
         .filter((scenario) => scenarioTypes.includes(scenario?.type))
@@ -1044,6 +1031,7 @@ function normalizeClipCandidates(result, segments) {
       type,
       valueScore,
       scores,
+      scoreReasons: Object.fromEntries(scoreKeys.map(key => [key, String(raw.scoreReasons?.[key] || "").trim()])),
       valuePortrait: String(raw.valuePortrait || "这是一段兼具思考与传播价值的访谈内容，适合进一步观看和再利用。").trim(),
       title: String(raw.title || "未命名片段").trim(),
       quote: verifiedQuote,
@@ -1054,7 +1042,6 @@ function normalizeClipCandidates(result, segments) {
         const scenario = scenariosByType.get(scenarioType) || {};
         return {
           type: scenarioType,
-          fit: ["高", "中", "低"].includes(scenario.fit) ? scenario.fit : "中",
           title: String(scenario.title || raw.title || "未命名内容").trim(),
           advice: String(scenario.advice || "可根据目标受众补充背景后使用。").trim()
         };
@@ -1068,13 +1055,13 @@ function normalizeClipCandidates(result, segments) {
         title: String(bgm?.title || "").trim(),
         artist: String(bgm?.artist || "").trim(),
         reason: String(bgm?.reason || "").trim()
-      })).filter((bgm) => bgm.title && bgm.artist).slice(0, 3)
+      })).filter((bgm) => bgm.title && bgm.artist).slice(0, 2)
     });
   }
   clips.sort((a, b) => b.valueScore - a.valueScore || a.from - b.from);
   return {
     version: 6,
-    intro: String(result?.intro || "AI 已按传播、认知与二次创作价值整理关键内容节点。"),
+    intro: String(result?.intro || "AI 已按短视频传播价值整理关键片段与剪辑建议。"),
     clips: clips.slice(0, 10)
   };
 }
@@ -1094,13 +1081,14 @@ function clipCandidateValidationIssues(result) {
     Number(clip.to) > Number(clip.from) + 3 &&
     String(clip?.title || "").trim().length >= 4 &&
     String(clip?.whyRecommended || "").trim().length >= 12 &&
+    ["emotionalIntensity", "depthOfThought", "storyTension", "spreadPotential"].every(key => String(clip.scoreReasons?.[key] || "").trim().length >= 12) &&
     Array.isArray(clip?.bgmSuggestions) &&
     clip.bgmSuggestions.filter((bgm) =>
       String(bgm?.title || "").trim() &&
       String(bgm?.artist || "").trim() &&
       String(bgm?.reason || "").trim() &&
       !containsBgmUsageInstruction(bgm.reason)
-    ).length === 3
+    ).length === 2
   );
   if (validClips.length < 6) {
     issues.push(`有效高光区间不足 6 个（当前 ${validClips.length} 个）`);
@@ -2305,17 +2293,18 @@ async function searchWeb(query, count = 10, options = {}) {
 }
 
 async function performWebSearch(query, count, domain = "") {
-  const searchUrl = new URL("/v1/web-search", AI_CONFIG.proxyUrl).href;
-  let response;
-  try {
-    response = await proxyFetch(searchUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, count, ...(domain ? { domain } : {}) })
-    }, "web_search");
-  } catch (error) {
-    throw createError("WEB_SEARCH_NETWORK_ERROR", `联网检索失败：${error.message}`);
-  }
+  const response = await deepSeekFetch(AI_CONFIG.searchUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: AI_CONFIG.model,
+      max_tokens: 1024,
+      thinking: { type: "disabled" },
+      messages: [{ role: "user", content: `请联网搜索“${query}”，只返回与查询直接相关的可靠结果。` }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 1,
+        ...(domain ? { allowed_domains: [domain] } : {}) }]
+    })
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw createError(
@@ -2323,7 +2312,7 @@ async function performWebSearch(query, count, domain = "") {
       payload?.error?.message || `联网检索失败（HTTP ${response.status}）。`
     );
   }
-  return (Array.isArray(payload.search_result) ? payload.search_result : [])
+  return normalizeDeepSeekWebSearchResponse(payload, count)
     .map((item) => ({
       title: String(item.title || "未命名结果"),
       content: String(item.content || ""),
@@ -2333,6 +2322,31 @@ async function performWebSearch(query, count, domain = "") {
       publishDate: String(item.publish_date || "")
     }))
     .filter((item) => item.url && !isDisallowedKnowledgeSource(item.url));
+}
+
+function normalizeDeepSeekWebSearchResponse(payload, count = 10) {
+  const blocks = Array.isArray(payload?.content) ? payload.content : [];
+  const results = [];
+  const seenUrls = new Set();
+  for (const block of blocks) {
+    if (block?.type !== "web_search_tool_result") continue;
+    const items = Array.isArray(block.content) ? block.content : [];
+    for (const item of items) {
+      if (item?.type !== "web_search_result") continue;
+      const link = String(item.url || item.link || "").trim();
+      if (!/^https?:\/\//iu.test(link) || seenUrls.has(link)) continue;
+      seenUrls.add(link);
+      results.push({
+        title: String(item.title || "未命名结果"),
+        content: String(item.snippet || item.content || item.title || ""),
+        link,
+        media: String(item.source || ""),
+        publish_date: String(item.page_age || item.publish_date || "")
+      });
+      if (results.length >= Math.min(20, Math.max(1, Number(count) || 10))) return results;
+    }
+  }
+  return results;
 }
 
 function isDisallowedKnowledgeSource(value) {
@@ -2940,7 +2954,7 @@ async function callAiJson({
       previewMessage,
     {
       responseId: payload.id,
-      model: "proxy-default",
+      model: AI_CONFIG.model,
       outputPreview
     }
   );
@@ -3013,12 +3027,12 @@ async function requestAiProxyCompletion({
     throw createError(
       "AI_PROXY_API_ERROR",
       result.payload?.error?.message ||
-        `AI API 代理请求失败（HTTP ${result.response.status}）。`,
+        `DeepSeek API请求失败（HTTP ${result.response.status}）。`,
       {
         status: result.response.status,
         type: result.payload?.error?.type,
         code: result.payload?.error?.code,
-        model: "proxy-default"
+        model: AI_CONFIG.model
       }
     );
   }
@@ -3038,13 +3052,14 @@ async function sendAiProxyRequest({
 }) {
   let response;
   try {
-    response = await proxyFetch(AI_CONFIG.proxyUrl, {
+    response = await deepSeekFetch(AI_CONFIG.chatUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-AI-Action-ID": actionId
       },
       body: JSON.stringify({
+        model: AI_CONFIG.model,
         messages,
         temperature,
         max_tokens: maxTokens,
@@ -3056,9 +3071,10 @@ async function sendAiProxyRequest({
       })
     }, feature);
   } catch (error) {
+    if (["USER_API_KEY_REQUIRED", "AI_CONSENT_REQUIRED"].includes(error?.code)) throw error;
     throw createError(
       "AI_PROXY_NETWORK_ERROR",
-      `无法连接 AI API 代理（${AI_CONFIG.proxyUrl}）：${error.message || "Failed to fetch"}`
+      `无法连接 DeepSeek API（${AI_CONFIG.chatUrl}）：${error.message || "Failed to fetch"}`
     );
   }
 
@@ -3068,7 +3084,7 @@ async function sendAiProxyRequest({
   } catch (error) {
     throw createError(
       "AI_PROXY_INVALID_RESPONSE",
-      `AI API 代理返回了无法解析的响应（HTTP ${response.status}）。`,
+      `DeepSeek API返回了无法解析的响应（HTTP ${response.status}）。`,
       { cause: String(error?.message || error).slice(0, 160) }
     );
   }
@@ -3206,78 +3222,24 @@ function createAiStreamReporter(feature) {
   };
 }
 
-async function proxyFetch(url, options = {}, feature = "unknown", retry = true) {
-  const consent = await chrome.storage.local.get("aiDataConsent");
-  if (
-    consent.aiDataConsent?.granted !== true ||
-    consent.aiDataConsent?.version !== 1
-  ) {
-    throw createError(
-      "AI_CONSENT_REQUIRED",
-      "请先打开播客智能阅读助手，在“AI 能力”中阅读数据说明并授权云端 AI。"
-    );
+async function deepSeekFetch(url, options = {}) {
+  // Only these two fixed provider endpoints may receive the user's key.
+  if (![AI_CONFIG.chatUrl, AI_CONFIG.searchUrl].includes(url)) {
+    throw createError("INVALID_AI_ENDPOINT", "不允许的 AI 服务地址。");
   }
-  const session = await getProxySession();
-  const headers = new Headers(options.headers || {});
-  headers.set("Authorization", `Bearer ${session.token}`);
-  headers.set("X-Installation-ID", session.installationId);
-  headers.set("X-AI-Feature", feature);
-  headers.set("X-Request-ID", crypto.randomUUID());
   const userApiKey = await getDeepSeekUserKey();
-  if (userApiKey) headers.set("X-DeepSeek-API-Key", userApiKey);
-  const response = await fetch(url, { ...options, headers });
-  if (response.status === 401 && retry) {
-    await chrome.storage.local.remove(PROXY_SESSION_KEY);
-    return proxyFetch(url, options, feature, false);
+  if (!userApiKey) {
+    throw createError("USER_API_KEY_REQUIRED", "请先填写自己的 DeepSeek API Key。");
   }
-  return response;
-}
-
-async function getProxySession() {
-  const stored = await chrome.storage.local.get([
-    PROXY_INSTALLATION_KEY,
-    PROXY_SESSION_KEY
-  ]);
-  let installationId = String(stored[PROXY_INSTALLATION_KEY] || "");
-  if (!/^[a-zA-Z0-9_-]{16,80}$/u.test(installationId)) {
-    installationId = crypto.randomUUID().replace(/-/gu, "");
-    await chrome.storage.local.set({
-      [PROXY_INSTALLATION_KEY]: installationId
-    });
+  const consent = await chrome.storage.local.get("aiDataConsent");
+  if (consent.aiDataConsent?.granted !== true || consent.aiDataConsent?.version !== 2) {
+    throw createError("AI_CONSENT_REQUIRED", "请先在 AI 能力中阅读数据说明并授权直接调用 DeepSeek。");
   }
-  const cached = stored[PROXY_SESSION_KEY];
-  if (
-    cached?.token &&
-    cached.installationId === installationId &&
-    Number(cached.expiresAt) > Date.now() + 60_000
-  ) {
-    return cached;
-  }
-
-  const registerUrl = new URL("/v1/register", AI_CONFIG.proxyUrl).href;
-  const response = await fetch(registerUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Request-ID": crypto.randomUUID()
-    },
-    body: JSON.stringify({ installationId })
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.token) {
-    throw createError(
-      "AI_PROXY_SESSION_ERROR",
-      payload?.error?.message ||
-        `无法建立 AI 服务会话（HTTP ${response.status}）。`
-    );
-  }
-  const session = {
-    installationId,
-    token: payload.token,
-    expiresAt: Date.now() + Math.max(300, Number(payload.expiresIn) || 3600) * 1000
-  };
-  await chrome.storage.local.set({ [PROXY_SESSION_KEY]: session });
-  return session;
+  const headers = new Headers(options.headers || {});
+  headers.delete("X-AI-Action-ID");
+  if (url === AI_CONFIG.searchUrl) headers.set("x-api-key", userApiKey);
+  else headers.set("Authorization", `Bearer ${userApiKey}`);
+  return fetch(url, { ...options, headers, redirect: "error" });
 }
 
 function extractChatCompletionText(payload) {

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "114",
   "name": "__MSG_extensionName__",
-  "version": "1.0.18",
+  "version": "1.0.25",
   "description": "__MSG_extensionDescription__",
   "default_locale": "zh_CN",
   "permissions": [
@@ -15,7 +15,7 @@
     "https://www.bilibili.com/*",
     "https://api.bilibili.com/*",
     "https://*.hdslb.com/*",
-    "http://127.0.0.1:8787/*"
+    "https://api.deepseek.com/*"
   ],
   "background": {
     "service_worker": "background.js"

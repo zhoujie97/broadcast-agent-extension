@@ -37,39 +37,39 @@
       <details id="ai-settings" class="ai-settings">
         <summary>
           <span>AI 能力</span>
-          <span id="ai-config-state" class="config-state configured">云端 AI</span>
+          <span id="ai-config-state" class="config-state">未配置</span>
         </summary>
         <div class="ai-settings-content">
           <section class="deepseek-key-settings" aria-labelledby="deepseek-key-title">
-            <div>
-              <h3 id="deepseek-key-title">DeepSeek API Key</h3>
-              <p class="secondary">每个功能每天免费 2 次；配置 Key 后使用你的 DeepSeek 账户。</p>
-            </div>
             <form id="deepseek-key-form">
               <label class="field" for="deepseek-key-input">
-                <span>API Key</span>
-                <input id="deepseek-key-input" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="sk-…" required>
+                <span id="deepseek-key-title">DeepSeek API Key</span>
+                <input id="deepseek-key-input" type="password" inputmode="text" autocomplete="off" spellcheck="false" placeholder="输入 sk- 开头的密钥" required>
               </label>
               <label class="deepseek-key-remember">
                 <input id="deepseek-key-remember" type="checkbox">
                 <span>在此设备记住</span>
               </label>
               <div class="deepseek-key-actions">
-                <button id="test-deepseek-key-button" type="button">测试 Key</button>
-                <button id="save-deepseek-key-button" type="submit">保存并使用</button>
+                <button id="test-deepseek-key-button" type="button">验证</button>
+                <button id="save-deepseek-key-button" type="submit">保存</button>
                 <button id="clear-deepseek-key-button" class="danger-text-button" type="button" hidden>删除 Key</button>
               </div>
             </form>
-            <p id="deepseek-key-status" class="secondary deepseek-key-status" aria-live="polite">未配置，当前使用免费额度。</p>
-            <p class="deepseek-key-links"><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">创建 DeepSeek API Key</a><a href="https://platform.deepseek.com/top_up" target="_blank" rel="noreferrer">充值 DeepSeek 账户</a></p>
+            <p id="deepseek-key-status" class="secondary deepseek-key-status" aria-live="polite"></p>
+            <p class="deepseek-key-links"><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">获取 Key ↗</a><a href="https://platform.deepseek.com/top_up" target="_blank" rel="noreferrer">账户充值 ↗</a></p>
+            <p class="key-billing-note">使用与验证均由你的 DeepSeek 账户计费。</p>
           </section>
+          <details class="ai-data-settings">
+            <summary>隐私与数据</summary>
           <div class="privacy-actions">
             <button id="review-ai-consent-button" type="button">数据使用说明</button>
             <button id="revoke-ai-consent-button" type="button" hidden>撤回 AI 授权</button>
             <button id="clear-video-ai-data-button" type="button">清除本视频 AI 缓存</button>
             <button id="clear-all-data-button" class="danger-text-button" type="button">清除全部本地数据</button>
           </div>
-          <p id="ai-consent-state" class="secondary consent-state">尚未授权云端 AI。</p>
+          <p id="ai-consent-state" class="secondary consent-state">首次生成时确认数据授权。</p>
+          </details>
           <p id="ai-status" class="ai-status" aria-live="polite"></p>
         </div>
       </details>
@@ -102,12 +102,12 @@
             <div class="transcript-correction-fields">
               <label>
                 <span>错误姓名</span>
-                <input id="transcript-wrong-name" type="text" minlength="2" maxlength="20" placeholder="例如：叶利静" required>
+                <input id="transcript-wrong-name" type="text" minlength="2" maxlength="20" required>
               </label>
               <span class="transcript-correction-arrow" aria-hidden="true">→</span>
               <label>
                 <span>正确姓名</span>
-                <input id="transcript-correct-name" type="text" minlength="2" maxlength="20" placeholder="例如：易立竞" required>
+                <input id="transcript-correct-name" type="text" minlength="2" maxlength="20" required>
               </label>
             </div>
             <button id="transcript-correction-button" type="submit">替换全文并保存</button>
@@ -143,7 +143,7 @@
             <div id="overview-interviewees" class="people-list"></div>
             <form id="overview-correction-form" class="overview-correction-form">
               <label for="overview-correction-input">发现内容有误？告诉 AI 需要核实的问题</label>
-              <textarea id="overview-correction-input" rows="3" maxlength="1000" placeholder="例如：张若楠应为章若楠；金靖不是围棋手，请结合本期视频重新核实人物身份。" required></textarea>
+              <textarea id="overview-correction-input" rows="3" maxlength="1000" required></textarea>
               <button id="overview-correction-button" type="submit">核实并修正</button>
               <p id="overview-correction-status" class="overview-correction-status" aria-live="polite" hidden></p>
             </form>
@@ -179,11 +179,11 @@
       <section id="clips-panel" class="workspace-panel" hidden>
         <div class="module-hero clips-hero">
           <p class="module-eyebrow">AI HIGHLIGHTS</p>
-          <h2>发现最值得观看、理解和再利用的内容</h2>
-          <p>从传播价值、认知价值和二次创作价值出发，识别长采访中的关键内容节点。</p>
+          <h2>找到值得剪成短视频的片段</h2>
+          <p>先看片段重点，再查看标题、传播建议与配乐。</p>
           <button id="generate-clips-button" class="primary-action" type="button" disabled>分析内容价值</button>
         </div>
-        <div id="clips-loading" class="module-loading" hidden><div class="spinner"></div><span>正在生成内容价值画像和传播场景建议…</span></div>
+        <div id="clips-loading" class="module-loading" hidden><div class="spinner"></div><span>正在分析短视频传播价值…</span></div>
         <div id="clips-output" class="clips-output" hidden>
           <div class="clips-toolbar">
             <div><p id="clips-intro" class="clips-intro"></p><p class="clips-sort-note">默认按综合内容价值从高到低排序</p></div>
@@ -208,25 +208,27 @@
           <p>保留原意与事实边界，把口语采访转换为更适合阅读和分享的文本。</p>
         </div>
         <div class="remix-controls">
-          <label class="field"><span>写作形式</span>
+          <div class="field"><span>写作形式</span>
             <select id="remix-style">
               <option value="profile">人物特写</option>
               <option value="first_person">嘉宾第一人称自述</option>
               <option value="insight_essay">深度文章</option>
             </select>
-          </label>
-          <label id="remix-guest-field" class="field"><span>选择嘉宾对象</span>
+          </div>
+          <div id="remix-guest-field" class="field"><span>选择嘉宾对象</span>
             <select id="remix-guest" aria-label="选择内容重构的嘉宾对象">
-              <option value="">生成时自动识别嘉宾</option>
+              <option value="">请先识别嘉宾</option>
             </select>
-          </label>
-          <label class="field"><span>篇幅</span>
+            <button id="identify-remix-guests" class="identify-remix-guests" type="button">识别嘉宾</button>
+            <p id="remix-guests-status" class="secondary" aria-live="polite"></p>
+          </div>
+          <div class="field"><span>篇幅</span>
             <select id="remix-length">
               <option value="short">短篇 · 约 1000 字</option>
               <option value="medium" selected>中篇 · 约 2000 字</option>
               <option value="long">长篇 · 约 3500 字</option>
             </select>
-          </label>
+          </div>
           <button id="generate-remix-button" class="primary-action" type="button" disabled>生成作品</button>
         </div>
         <div id="remix-loading" class="module-loading" hidden><div class="spinner"></div><span>正在构思结构并重写采访…</span></div>
@@ -302,17 +304,17 @@
       </form>
     </dialog>
 
-    <dialog id="quota-dialog" class="consent-dialog quota-dialog">
+    <dialog id="key-required-dialog" class="consent-dialog key-required-dialog">
       <div class="dialog-header">
         <div>
-          <p class="dialog-kicker">FREE LIMIT</p>
-          <h2>今日免费额度已用完</h2>
+          <p class="dialog-kicker">AI 设置</p>
+          <h2>先配置你的 DeepSeek Key</h2>
         </div>
-        <button id="close-quota-dialog-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
+        <button id="close-key-required-dialog-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
       </div>
-      <p id="quota-dialog-message" class="quota-dialog-message">该功能每天可免费使用 2 次。你可以明天继续使用，或者填写自己的 DeepSeek API Key。</p>
+      <p id="key-required-dialog-message" class="key-required-dialog-message">填写个人 DeepSeek API Key 后即可生成，费用由你的账户承担。</p>
       <div class="dialog-actions">
-        <button id="later-quota-button" type="button">稍后再说</button>
+        <button id="later-key-required-button" type="button">稍后再说</button>
         <button id="configure-key-button" class="primary-action" type="button">填写自己的 Key</button>
       </div>
     </dialog>
@@ -326,8 +328,8 @@
         <button id="close-ai-consent-button" class="icon-button dialog-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="consent-copy">
-        <p>为了生成内容地图、高光切片、内容重构、问答、纠错和延伸探索，插件会把当前视频标题、相关字幕片段以及你的问题或纠错反馈发送到我们的 HTTPS AI 代理，再由代理调用当前配置的 AI 模型。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
-        <p>AI 结果和知识笔记默认保存在本机浏览器中。你也可以填写自己的 DeepSeek API Key；Key 只由浏览器保存，调用时经 HTTPS 临时发送，代理不会持久化或记录。你可以随时删除 Key、撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
+        <p>为了生成内容地图、高光切片、内容重构、问答、纠错和延伸探索，插件会把当前视频标题、相关字幕片段以及你的问题或纠错反馈通过 HTTPS 直接发送到 DeepSeek。不会发送你的 Bilibili 密码、Cookie 或浏览历史。</p>
+        <p>AI 结果和知识笔记默认保存在本机浏览器中。AI 功能必须填写自己的 DeepSeek API Key，费用由你的 DeepSeek 账户承担。Key 只由浏览器保存，调用时通过 HTTPS 直接发送给 DeepSeek，不经过开发者服务器。测试 Key 也会产生少量调用费用。你可以随时删除 Key、撤回授权或清除数据；撤回后，已有的非 AI 字幕阅读和视频跳转仍可使用。</p>
         <p><a href="privacy.html" target="_blank" rel="noreferrer">查看完整隐私说明</a></p>
       </div>
       <div class="dialog-actions">
@@ -338,6 +340,7 @@
 
     <script src="transcript-utils.js"></script>
     <script src="content-utils.js"></script>
+    <script src="select-controls.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>
